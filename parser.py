@@ -80,6 +80,13 @@ class VarRef(Expr):
 
 
 @dataclass(frozen=True)
+class BinaryOp(Expr):
+    left: Expr
+    op: str  # "plus", "minus", "times", "divided_by"
+    right: Expr
+
+
+@dataclass(frozen=True)
 class Condition:
     # currently only supports: the <name> is <expr>
     name: str
@@ -240,18 +247,42 @@ def _parse_task(lines: Sequence[LineTokens], i: int) -> Tuple[TaskDefStmt, int]:
 
 
 def _parse_expr_from_tokens(tokens: Sequence[str], line_no: int) -> Expr:
-    if len(tokens) != 1:
-        raise ParseError(f"Only single-token expressions supported on line {line_no}")
+    # Handle binary operations: <expr> <op> <expr>
+    if len(tokens) >= 3:
+        # Look for operator tokens
+        for i, tok in enumerate(tokens):
+            if tok in ("plus", "minus", "times", "divided", "by"):
+                if tok == "divided" and i + 1 < len(tokens) and tokens[i + 1] == "by":
+                    # Handle "divided by" as two tokens
+                    left_tokens = tokens[:i]
+                    right_tokens = tokens[i + 2 :]
+                    if not left_tokens or not right_tokens:
+                        raise ParseError(f"Invalid binary operation on line {line_no}")
+                    left = _parse_expr_from_tokens(left_tokens, line_no)
+                    right = _parse_expr_from_tokens(right_tokens, line_no)
+                    return BinaryOp(left=left, op="divided_by", right=right)
+                elif tok in ("plus", "minus", "times"):
+                    left_tokens = tokens[:i]
+                    right_tokens = tokens[i + 1 :]
+                    if not left_tokens or not right_tokens:
+                        raise ParseError(f"Invalid binary operation on line {line_no}")
+                    left = _parse_expr_from_tokens(left_tokens, line_no)
+                    right = _parse_expr_from_tokens(right_tokens, line_no)
+                    return BinaryOp(left=left, op=tok, right=right)
 
-    tok = tokens[0]
-    if tok.startswith('"') and tok.endswith('"') and len(tok) >= 2:
-        return StringLiteral(value=tok[1:-1])
+    # Single token expression
+    if len(tokens) == 1:
+        tok = tokens[0]
+        if tok.startswith('"') and tok.endswith('"') and len(tok) >= 2:
+            return StringLiteral(value=tok[1:-1])
 
-    if tok.isdigit() or (tok.startswith("-") and tok[1:].isdigit()):
-        return NumberLiteral(value=int(tok))
+        if tok.isdigit() or (tok.startswith("-") and tok[1:].isdigit()):
+            return NumberLiteral(value=int(tok))
 
-    # variable reference
-    return VarRef(name=tok)
+        # variable reference
+        return VarRef(name=tok)
+
+    raise ParseError(f"Unable to parse expression on line {line_no}")
 
 
 def _error_stmt(lines: Sequence[LineTokens], i: int, msg: str) -> Tuple[Stmt, int]:

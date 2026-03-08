@@ -1,0 +1,21 @@
+set x to 100
+set y to 25
+
+set result1 to x plus y
+set result2 to x minus y
+set result3 to x times y
+set result4 to x divided by y
+
+show "100 + 25 =" result1
+show "100 - 25 =" result2
+show "100 * 25 =" result3
+show "100 / 25 =" result4
+
+set neg to -10
+set pos to 5
+
+set neg_plus to neg plus pos
+set neg_minus to neg minus pos
+
+show "-10 + 5 =" neg_plus
+show "-10 - 5 =" neg_minus

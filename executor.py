@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Union
 
 from parser import (
+    BinaryOp,
     Condition,
     DoStmt,
     Expr,
@@ -102,4 +103,21 @@ def _eval_expr(expr: Expr, env: Environment) -> Value:
             # treat unknown identifiers as plain strings
             return expr.name
         return env.variables[expr.name]
+    if isinstance(expr, BinaryOp):
+        left = _eval_expr(expr.left, env)
+        right = _eval_expr(expr.right, env)
+        # Ensure both operands are numbers for math operations
+        if not isinstance(left, int) or not isinstance(right, int):
+            raise RuntimeErrorRC(f"Math operations require numbers")
+        if expr.op == "plus":
+            return left + right
+        if expr.op == "minus":
+            return left - right
+        if expr.op == "times":
+            return left * right
+        if expr.op == "divided_by":
+            if right == 0:
+                raise RuntimeErrorRC(f"Division by zero")
+            return left // right  # integer division
+        raise RuntimeErrorRC(f"Unknown math operator: {expr.op}")
     raise RuntimeErrorRC(f"Unsupported expression type: {type(expr).__name__}")
