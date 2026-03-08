@@ -42,6 +42,7 @@ class DoStmt(Stmt):
 class IfStmt(Stmt):
     condition: "Condition"
     body: List[Stmt]
+    else_body: Optional[List[Stmt]]
     line_no: int
 
 
@@ -105,6 +106,10 @@ def _parse_block(
             if stop_at_end:
                 return out, i + 1
             raise ParseError(f"Unexpected 'and end' on line {lt.line_no}")
+
+        # allow else ... inside an if block; handled by caller
+        if toks == ["else", "..."] and stop_at_end:
+            return out, i
 
         stmt, i = _parse_stmt(lines, i)
         out.append(stmt)
@@ -195,7 +200,13 @@ def _parse_if(lines: Sequence[LineTokens], i: int) -> Tuple[IfStmt, int]:
     cond = Condition(name=name, equals=equals_expr)
 
     body, next_i = _parse_block(lines, i + 1, stop_at_end=True)
-    return IfStmt(condition=cond, body=body, line_no=lt.line_no), next_i
+
+    # check for optional else block
+    else_body = None
+    if next_i < len(lines) and lines[next_i].tokens == ["else", "..."]:
+        else_body, next_i = _parse_block(lines, next_i + 1, stop_at_end=True)
+
+    return IfStmt(condition=cond, body=body, else_body=else_body, line_no=lt.line_no), next_i
 
 
 def _parse_repeat(lines: Sequence[LineTokens], i: int) -> Tuple[RepeatStmt, int]:

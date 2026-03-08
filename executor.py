@@ -57,6 +57,8 @@ def _exec_stmt(st: Any, env: Environment) -> None:
     if isinstance(st, IfStmt):
         if _eval_condition(st.condition, env):
             _exec_block(st.body, env)
+        elif st.else_body is not None:
+            _exec_block(st.else_body, env)
         return
 
     if isinstance(st, RepeatStmt):

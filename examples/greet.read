@@ -1,0 +1,19 @@
+set name to Alice
+
+show "Hello" name
+
+task greet ...
+  show "Hi there" name
+and end
+
+do greet
+
+if the name is Alice ...
+  show "Welcome Alice"
+else ...
+  show "Welcome guest"
+and end
+
+repeat 2 times ...
+  do greet
+and end

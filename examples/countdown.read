@@ -1,0 +1,12 @@
+set count to 5
+
+show "Starting countdown"
+
+repeat 5 times ...
+  show count
+  if the count is 1 ...
+    show "Blast off!"
+  else ...
+    show "..."
+  and end
+and end
