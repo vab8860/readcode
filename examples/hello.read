@@ -1,0 +1,19 @@
+set age to 18
+set name to John
+
+show hello world
+show age
+
+if the age is 18 ...
+show you are adult
+and end
+
+repeat 5 times ...
+show hello
+and end
+
+task greet ...
+show hello world
+and end
+
+do greet
