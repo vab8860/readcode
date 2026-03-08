@@ -88,15 +88,15 @@ class VarRef(Expr):
 @dataclass(frozen=True)
 class BinaryOp(Expr):
     left: Expr
-    op: str  # "plus", "minus", "times", "divided_by"
+    op: str  # "plus", "minus", "times", "divided_by", "joined_with"
     right: Expr
 
 
 @dataclass(frozen=True)
 class Condition:
-    # currently only supports: the <name> is <expr>
     name: str
-    equals: Expr
+    op: str  # "==", "!=", ">", "<", ">=", "<="
+    right: Expr
 
 
 def parse(lines: Sequence[LineTokens]) -> Program:
@@ -128,7 +128,7 @@ def _parse_block(
         out.append(stmt)
 
     if stop_at_end:
-        raise ParseError("Missing 'and end' before end of file")
+        raise ParseError("Oops! You forgot to close your block with 'and end'.")
 
     return out, i
 
@@ -156,7 +156,9 @@ def _parse_stmt(lines: Sequence[LineTokens], i: int) -> Tuple[Stmt, int]:
     if head == "task":
         return _parse_task(lines, i)
 
-    raise ParseError(f"Unknown statement '{head}' on line {lt.line_no}")
+    raise ParseError(
+        f"Oops! I don't understand '{head}' on line {lt.line_no}. Check your spelling!"
+    )
 
 
 def _expect_tokens(lt: LineTokens, expected: Sequence[str]) -> None:
@@ -205,7 +207,7 @@ def _parse_ask(lt: LineTokens) -> AskStmt:
 
 def _parse_if(lines: Sequence[LineTokens], i: int) -> Tuple[IfStmt, int]:
     lt = lines[i]
-    # if the <name> is <expr> ...
+    # if the <name> is <comparison> ...
     if len(lt.tokens) < 6:
         raise ParseError(f"Invalid if statement on line {lt.line_no}")
     if lt.tokens[1] != "the":
@@ -217,9 +219,10 @@ def _parse_if(lines: Sequence[LineTokens], i: int) -> Tuple[IfStmt, int]:
     if lt.tokens[-1] != "...":
         raise ParseError(f"Expected '...' to start if block on line {lt.line_no}")
 
-    equals_tokens = lt.tokens[4:-1]
-    equals_expr = _parse_expr_from_tokens(equals_tokens, lt.line_no)
-    cond = Condition(name=name, equals=equals_expr)
+    comp_tokens = lt.tokens[4:-1]
+    op, right_tokens = _parse_comparison(comp_tokens, lt.line_no)
+    right_expr = _parse_expr_from_tokens(right_tokens, lt.line_no)
+    cond = Condition(name=name, op=op, right=right_expr)
 
     body, next_i = _parse_block(lines, i + 1, stop_at_end=True)
 
@@ -229,6 +232,39 @@ def _parse_if(lines: Sequence[LineTokens], i: int) -> Tuple[IfStmt, int]:
         else_body, next_i = _parse_block(lines, next_i + 1, stop_at_end=True)
 
     return IfStmt(condition=cond, body=body, else_body=else_body, line_no=lt.line_no), next_i
+
+
+def _parse_comparison(tokens: Sequence[str], line_no: int) -> Tuple[str, List[str]]:
+    if not tokens:
+        raise ParseError(f"Invalid comparison on line {line_no}")
+
+    # Supported forms:
+    # - equal to <expr>
+    # - <expr>              (back-compat: treated as == <expr>)
+    # - not <expr>
+    # - greater than <expr>
+    # - less than <expr>
+    # - greater than or equal to <expr>
+    # - less than or equal to <expr>
+
+    if len(tokens) >= 2 and tokens[0] == "equal" and tokens[1] == "to":
+        return "==", list(tokens[2:])
+
+    if tokens[0] == "not":
+        return "!=", list(tokens[1:])
+
+    if len(tokens) >= 2 and tokens[0] == "greater" and tokens[1] == "than":
+        if len(tokens) >= 5 and tokens[2:5] == ["or", "equal", "to"]:
+            return ">=", list(tokens[5:])
+        return ">", list(tokens[2:])
+
+    if len(tokens) >= 2 and tokens[0] == "less" and tokens[1] == "than":
+        if len(tokens) >= 5 and tokens[2:5] == ["or", "equal", "to"]:
+            return "<=", list(tokens[5:])
+        return "<", list(tokens[2:])
+
+    # Back-compat: "is 18" means equality
+    return "==", list(tokens)
 
 
 def _parse_repeat(lines: Sequence[LineTokens], i: int) -> Tuple[RepeatStmt, int]:
@@ -264,6 +300,17 @@ def _parse_task(lines: Sequence[LineTokens], i: int) -> Tuple[TaskDefStmt, int]:
 def _parse_expr_from_tokens(tokens: Sequence[str], line_no: int) -> Expr:
     # Handle binary operations: <expr> <op> <expr>
     if len(tokens) >= 3:
+        # String join: <expr> joined with <expr>
+        for i in range(len(tokens) - 1):
+            if tokens[i] == "joined" and tokens[i + 1] == "with":
+                left_tokens = tokens[:i]
+                right_tokens = tokens[i + 2 :]
+                if not left_tokens or not right_tokens:
+                    raise ParseError(f"Invalid joined with operation on line {line_no}")
+                left = _parse_expr_from_tokens(left_tokens, line_no)
+                right = _parse_expr_from_tokens(right_tokens, line_no)
+                return BinaryOp(left=left, op="joined_with", right=right)
+
         # Look for operator tokens
         for i, tok in enumerate(tokens):
             if tok in ("plus", "minus", "times", "divided", "by"):
