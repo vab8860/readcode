@@ -1,0 +1,43 @@
+show "Welcome to ReadCode Hotel Booking"
+
+ask guest
+ask nights
+ask room
+
+set rate to 0
+set room_name to "unknown"
+
+if the room is equal to 1 ...
+  set rate to 1000
+  set room_name to "standard"
+else ...
+  if the room is equal to 2 ...
+    set rate to 2000
+    set room_name to "deluxe"
+  else ...
+    if the room is equal to 3 ...
+      set rate to 5000
+      set room_name to "suite"
+    else ...
+      set rate to 1000
+      set room_name to "standard"
+      show "Invalid room type. Using standard by default."
+    and end
+  and end
+and end
+
+set total to rate times nights
+
+show "----- Booking Summary -----"
+set guest_line to "Guest:" joined with guest
+show guest_line
+
+set room_line to "Room:" joined with room_name
+show room_line
+
+set nights_line to "Nights:" joined with nights
+show nights_line
+
+set total_line to "Total Price:" joined with total
+show total_line
+show "---------------------------"
