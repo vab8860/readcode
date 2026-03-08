@@ -1,0 +1,36 @@
+# New Features Demo
+
+# 1) COMMENTS
+show "Comments work!"
+
+# 2) RANDOM NUMBER
+set num to random between 1 and 10
+show "Random:" num
+
+# 3) FILE READ/WRITE
+save "hello world" to "file.txt"
+set content to read from "file.txt"
+show "File:" content
+
+# 4) STRING OPERATIONS
+set name to "Rahul"
+set upper to uppercase of name
+set lower to lowercase of name
+set length to length of name
+show upper
+show lower
+show "Length:" length
+
+# 5) WHILE LOOP
+set age to 15
+while age is less than 18 ...
+show "Age:" age
+set age to age plus 1
+done
+show "Final age:" age
+
+# 6) MULTIPLE ASSIGNMENT
+set a, b, c to 1, 2, 3
+show a
+show b
+show c

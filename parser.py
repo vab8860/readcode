@@ -35,6 +35,20 @@ class ShowStmt(Stmt):
 @dataclass(frozen=True)
 class DoStmt(Stmt):
     task_name: str
+    args: List["Expr"]
+    line_no: int
+
+
+@dataclass(frozen=True)
+class ReturnStmt(Stmt):
+    value: "Expr"
+    line_no: int
+
+
+@dataclass(frozen=True)
+class AddToListStmt(Stmt):
+    item: "Expr"
+    list_name: str
     line_no: int
 
 
@@ -62,7 +76,29 @@ class RepeatStmt(Stmt):
 @dataclass(frozen=True)
 class TaskDefStmt(Stmt):
     name: str
+    params: List[str]
     body: List[Stmt]
+    line_no: int
+
+
+@dataclass(frozen=True)
+class SaveStmt(Stmt):
+    content: "Expr"
+    filename: "Expr"
+    line_no: int
+
+
+@dataclass(frozen=True)
+class WhileStmt(Stmt):
+    condition: "Condition"
+    body: List[Stmt]
+    line_no: int
+
+
+@dataclass(frozen=True)
+class MultiSetStmt(Stmt):
+    names: List[str]
+    values: List["Expr"]
     line_no: int
 
 
@@ -86,10 +122,49 @@ class VarRef(Expr):
 
 
 @dataclass(frozen=True)
+class ListLiteral(Expr):
+    items: List[Expr]
+
+
+@dataclass(frozen=True)
+class ListAccessExpr(Expr):
+    kind: str  # "first" | "last"
+    list_name: str
+
+
+@dataclass(frozen=True)
+class CountOfExpr(Expr):
+    list_name: str
+
+
+@dataclass(frozen=True)
+class RunTaskExpr(Expr):
+    task_name: str
+    args: List[Expr]
+
+
+@dataclass(frozen=True)
 class BinaryOp(Expr):
     left: Expr
     op: str  # "plus", "minus", "times", "divided_by", "joined_with"
     right: Expr
+
+
+@dataclass(frozen=True)
+class RandomBetweenExpr(Expr):
+    low: Expr
+    high: Expr
+
+
+@dataclass(frozen=True)
+class ReadFromExpr(Expr):
+    filename: Expr
+
+
+@dataclass(frozen=True)
+class StringOpExpr(Expr):
+    op: str  # "uppercase" | "lowercase" | "length"
+    value: Expr
 
 
 @dataclass(frozen=True)
@@ -115,9 +190,11 @@ def _parse_block(
     while i < len(lines):
         lt = lines[i]
         toks = lt.tokens
-        if toks == ["and", "end"]:
+        if toks == ["and", "end"] or toks == ["done"]:
             if stop_at_end:
                 return out, i + 1
+            if toks == ["done"]:
+                raise ParseError(f"Unexpected 'done' on line {lt.line_no}")
             raise ParseError(f"Unexpected 'and end' on line {lt.line_no}")
 
         # allow else ... inside an if block; handled by caller
@@ -141,20 +218,42 @@ def _parse_stmt(lines: Sequence[LineTokens], i: int) -> Tuple[Stmt, int]:
 
     head = toks[0]
     if head == "set":
+        # multiple assignment: set a, b, c to 1, 2, 3
+        if "to" in toks:
+            to_i = toks.index("to")
+            if "," in toks[1:to_i]:
+                return _parse_multi_set(lt), i + 1
         return _parse_set(lt), i + 1
+    if head == "let":
+        return _parse_let(lt), i + 1
     if head == "show":
         return _parse_show(lt), i + 1
+    if head == "say":
+        return _parse_say(lt), i + 1
     if head == "do":
         return _parse_do(lt), i + 1
     if head == "ask":
         return _parse_ask(lt), i + 1
+    if head == "please":
+        return _parse_please(lt), i + 1
 
     if head == "if":
         return _parse_if(lines, i)
+    if head == "while":
+        return _parse_while(lines, i)
     if head == "repeat":
         return _parse_repeat(lines, i)
     if head == "task":
         return _parse_task(lines, i)
+
+    if head == "give":
+        return _parse_return(lt), i + 1
+
+    if head == "add":
+        return _parse_add_to_list(lt), i + 1
+
+    if head == "save":
+        return _parse_save(lt), i + 1
 
     raise ParseError(
         f"Oops! I don't understand '{head}' on line {lt.line_no}. Check your spelling!"
@@ -174,6 +273,26 @@ def _parse_set(lt: LineTokens) -> SetStmt:
         raise ParseError(f"Invalid set statement on line {lt.line_no}")
     if lt.tokens[2] != "to":
         raise ParseError(f"Expected 'to' in set statement on line {lt.line_no}")
+    # multiple assignment: set a, b, c to 1, 2, 3
+    try:
+        to_i = lt.tokens.index("to")
+    except ValueError:
+        to_i = -1
+    if to_i != -1 and "," in lt.tokens[1:to_i]:
+        return _parse_multi_set(lt)
+
+    name = lt.tokens[1]
+    value_tokens = lt.tokens[3:]
+    value = _parse_expr_from_tokens(value_tokens, lt.line_no)
+    return SetStmt(name=name, value=value, line_no=lt.line_no)
+
+
+def _parse_let(lt: LineTokens) -> SetStmt:
+    # let <name> be <expr>
+    if len(lt.tokens) < 4:
+        raise ParseError(f"Invalid let statement on line {lt.line_no}")
+    if lt.tokens[2] != "be":
+        raise ParseError(f"Expected 'be' in let statement on line {lt.line_no}")
     name = lt.tokens[1]
     value_tokens = lt.tokens[3:]
     value = _parse_expr_from_tokens(value_tokens, lt.line_no)
@@ -184,18 +303,190 @@ def _parse_show(lt: LineTokens) -> ShowStmt:
     # show <expr...>
     if len(lt.tokens) < 2:
         raise ParseError(f"Invalid show statement on line {lt.line_no}")
-    parts: List[Expr] = []
-    # For simplicity, parse each token as an expr (quoted string, number, or var)
-    for tok in lt.tokens[1:]:
-        parts.append(_parse_expr_from_tokens([tok], lt.line_no))
+    # show all <listname>
+    if len(lt.tokens) == 3 and lt.tokens[1] == "all":
+        return ShowStmt(parts=[_parse_expr_from_tokens(["all", lt.tokens[2]], lt.line_no)], line_no=lt.line_no)
+    parts = _parse_show_parts(lt.tokens[1:], lt.line_no)
     return ShowStmt(parts=parts, line_no=lt.line_no)
 
 
+def _parse_add_to_list(lt: LineTokens) -> AddToListStmt:
+    # add <item> to <listname>
+    if len(lt.tokens) < 4:
+        raise ParseError(f"Invalid add statement on line {lt.line_no}. Example: add orange to fruits")
+    if lt.tokens[-2] != "to":
+        raise ParseError(f"Invalid add statement on line {lt.line_no}. Example: add orange to fruits")
+    item_tokens = lt.tokens[1:-2]
+    item_expr = _parse_expr_from_tokens(item_tokens, lt.line_no)
+    return AddToListStmt(item=item_expr, list_name=lt.tokens[-1], line_no=lt.line_no)
+
+
+def _parse_save(lt: LineTokens) -> SaveStmt:
+    # save <content expr> to <filename expr>
+    if len(lt.tokens) < 4:
+        raise ParseError(
+            f"Invalid save statement on line {lt.line_no}. Example: save \"hello\" to \"file.txt\""
+        )
+    if "to" not in lt.tokens[1:]:
+        raise ParseError(
+            f"Invalid save statement on line {lt.line_no}. Example: save \"hello\" to \"file.txt\""
+        )
+    to_i = lt.tokens.index("to")
+    if to_i <= 1 or to_i >= len(lt.tokens) - 1:
+        raise ParseError(
+            f"Invalid save statement on line {lt.line_no}. Example: save \"hello\" to \"file.txt\""
+        )
+    content_tokens = lt.tokens[1:to_i]
+    filename_tokens = lt.tokens[to_i + 1 :]
+    content = _parse_expr_from_tokens(content_tokens, lt.line_no)
+    filename = _parse_expr_from_tokens(filename_tokens, lt.line_no)
+    return SaveStmt(content=content, filename=filename, line_no=lt.line_no)
+
+
+def _parse_multi_set(lt: LineTokens) -> MultiSetStmt:
+    # set a, b, c to 1, 2, 3
+    if lt.tokens[0] != "set" or len(lt.tokens) < 4:
+        raise ParseError(f"Invalid set statement on line {lt.line_no}")
+    if "to" not in lt.tokens:
+        raise ParseError(f"Expected 'to' in set statement on line {lt.line_no}")
+    to_i = lt.tokens.index("to")
+    if to_i <= 1:
+        raise ParseError(f"Invalid multiple assignment on line {lt.line_no}. Example: set a, b to 1, 2")
+
+    name_tokens = lt.tokens[1:to_i]
+    value_tokens = lt.tokens[to_i + 1 :]
+
+    names: List[str] = []
+    current: List[str] = []
+    for t in name_tokens:
+        if t == ",":
+            if not current:
+                raise ParseError(f"Invalid multiple assignment on line {lt.line_no}. Example: set a, b to 1, 2")
+            names.append("".join(current).strip())
+            current = []
+            continue
+        current.append(t)
+    if current:
+        names.append("".join(current).strip())
+
+    values: List[Expr] = []
+    current_expr: List[str] = []
+    for t in value_tokens:
+        if t == ",":
+            if not current_expr:
+                raise ParseError(f"Invalid multiple assignment on line {lt.line_no}. Example: set a, b to 1, 2")
+            values.append(_parse_expr_from_tokens(current_expr, lt.line_no))
+            current_expr = []
+            continue
+        current_expr.append(t)
+    if current_expr:
+        values.append(_parse_expr_from_tokens(current_expr, lt.line_no))
+
+    if not names:
+        raise ParseError(f"Invalid multiple assignment on line {lt.line_no}. Example: set a, b to 1, 2")
+    if len(names) != len(values):
+        raise ParseError(
+            f"Invalid multiple assignment on line {lt.line_no}. You gave {len(names)} names but {len(values)} values."
+        )
+    return MultiSetStmt(names=names, values=values, line_no=lt.line_no)
+
+
+def _parse_while(lines: Sequence[LineTokens], i: int) -> Tuple[WhileStmt, int]:
+    lt = lines[i]
+    # while <name> is <comparison> ...
+    if len(lt.tokens) < 5:
+        raise ParseError(f"Invalid while statement on line {lt.line_no}. Example: while age is less than 18 ...")
+    if lt.tokens[-1] != "...":
+        raise ParseError(f"Expected '...' to start while block on line {lt.line_no}")
+    if lt.tokens[2] != "is":
+        raise ParseError(f"Expected 'is' in while statement on line {lt.line_no}")
+
+    name = lt.tokens[1]
+    op, rhs_tokens = _parse_comparison(lt.tokens[3:-1], lt.line_no)
+    right = _parse_expr_from_tokens(rhs_tokens, lt.line_no)
+    cond = Condition(name=name, op=op, right=right)
+
+    body, next_i = _parse_block(lines, i + 1, stop_at_end=True)
+    return WhileStmt(condition=cond, body=body, line_no=lt.line_no), next_i
+
+
+def _parse_show_parts(tokens: Sequence[str], line_no: int) -> List[Expr]:
+    # Split into multiple expressions.
+    # - If we see a 'joined with' operator, that whole remaining sequence is a single expression.
+    # - If we see a math operator, we parse <left> <op> <right> where left/right are single-token.
+    # - Otherwise, each token is treated as its own single-token expression.
+    out: List[Expr] = []
+    i = 0
+    while i < len(tokens):
+        # list helper expressions
+        if i + 3 < len(tokens) and tokens[i] in ("first", "last") and tokens[i + 1] == "item" and tokens[i + 2] == "of":
+            out.append(_parse_expr_from_tokens(tokens[i : i + 4], line_no))
+            i += 4
+            continue
+        if i + 2 < len(tokens) and tokens[i] == "count" and tokens[i + 1] == "of":
+            out.append(_parse_expr_from_tokens(tokens[i : i + 3], line_no))
+            i += 3
+            continue
+
+        # joined with consumes the rest (supports: <left> joined with <right>, nested if needed)
+        if "joined" in tokens[i:]:
+            j = i
+            while j < len(tokens) - 1:
+                if tokens[j] == "joined" and tokens[j + 1] == "with":
+                    expr = _parse_expr_from_tokens(tokens[i:], line_no)
+                    out.append(expr)
+                    return out
+                j += 1
+
+        # math op as 3 or 4 tokens: a plus b | a minus b | a times b | a divided by b
+        if i + 2 < len(tokens) and tokens[i + 1] in ("plus", "minus", "times"):
+            expr = _parse_expr_from_tokens(tokens[i : i + 3], line_no)
+            out.append(expr)
+            i += 3
+            continue
+        if i + 3 < len(tokens) and tokens[i + 1] == "divided" and tokens[i + 2] == "by":
+            expr = _parse_expr_from_tokens(tokens[i : i + 4], line_no)
+            out.append(expr)
+            i += 4
+            continue
+
+        out.append(_parse_expr_from_tokens([tokens[i]], line_no))
+        i += 1
+
+    return out
+
+
+def _parse_say(lt: LineTokens) -> ShowStmt:
+    # say <expr...>
+    # alias of show
+    lt2 = LineTokens(line_no=lt.line_no, raw=lt.raw, tokens=["show", *lt.tokens[1:]])
+    return _parse_show(lt2)
+
+
 def _parse_do(lt: LineTokens) -> DoStmt:
-    # do <taskname>
-    if len(lt.tokens) != 2:
+    # do <taskname> [with <arg1> (and <arg2> ...)]
+    if len(lt.tokens) < 2:
         raise ParseError(f"Invalid do statement on line {lt.line_no}")
-    return DoStmt(task_name=lt.tokens[1], line_no=lt.line_no)
+
+    name = lt.tokens[1]
+    args: List[Expr] = []
+    if len(lt.tokens) == 2:
+        return DoStmt(task_name=name, args=args, line_no=lt.line_no)
+
+    if lt.tokens[2] != "with":
+        raise ParseError(f"Invalid do statement on line {lt.line_no}. Did you mean: do {name} with ...")
+
+    arg_tokens = lt.tokens[3:]
+    args = _parse_arg_list(arg_tokens, lt.line_no)
+    return DoStmt(task_name=name, args=args, line_no=lt.line_no)
+
+
+def _parse_return(lt: LineTokens) -> ReturnStmt:
+    # give back <expr>
+    if len(lt.tokens) < 3 or lt.tokens[1] != "back":
+        raise ParseError(f"Invalid return statement on line {lt.line_no}. Use: give back value")
+    expr = _parse_expr_from_tokens(lt.tokens[2:], lt.line_no)
+    return ReturnStmt(value=expr, line_no=lt.line_no)
 
 
 def _parse_ask(lt: LineTokens) -> AskStmt:
@@ -203,6 +494,15 @@ def _parse_ask(lt: LineTokens) -> AskStmt:
     if len(lt.tokens) != 2:
         raise ParseError(f"Invalid ask statement on line {lt.line_no}")
     return AskStmt(name=lt.tokens[1], line_no=lt.line_no)
+
+
+def _parse_please(lt: LineTokens) -> AskStmt:
+    # please ask <name>
+    if len(lt.tokens) != 3 or lt.tokens[1] != "ask":
+        raise ParseError(
+            f"Invalid statement on line {lt.line_no}. Did you mean: please ask name"
+        )
+    return AskStmt(name=lt.tokens[2], line_no=lt.line_no)
 
 
 def _parse_if(lines: Sequence[LineTokens], i: int) -> Tuple[IfStmt, int]:
@@ -274,10 +574,17 @@ def _parse_repeat(lines: Sequence[LineTokens], i: int) -> Tuple[RepeatStmt, int]
         raise ParseError(f"Invalid repeat statement on line {lt.line_no}")
     if lt.tokens[-1] != "...":
         raise ParseError(f"Expected '...' to start repeat block on line {lt.line_no}")
-    if lt.tokens[-2] != "times":
-        raise ParseError(f"Expected 'times' in repeat statement on line {lt.line_no}")
 
-    times_tokens = lt.tokens[1:-2]
+    # allow both:
+    # repeat 5 times ...
+    # repeat 5 times do ...
+    if len(lt.tokens) >= 5 and lt.tokens[-2] == "do" and lt.tokens[-3] == "times":
+        times_tokens = lt.tokens[1:-3]
+    else:
+        if lt.tokens[-2] != "times":
+            raise ParseError(f"Expected 'times' in repeat statement on line {lt.line_no}")
+        times_tokens = lt.tokens[1:-2]
+
     times_expr = _parse_expr_from_tokens(times_tokens, lt.line_no)
 
     body, next_i = _parse_block(lines, i + 1, stop_at_end=True)
@@ -286,20 +593,129 @@ def _parse_repeat(lines: Sequence[LineTokens], i: int) -> Tuple[RepeatStmt, int]
 
 def _parse_task(lines: Sequence[LineTokens], i: int) -> Tuple[TaskDefStmt, int]:
     lt = lines[i]
-    # task <name> ...
-    if len(lt.tokens) != 3:
+    # task <name> [with <p1> (and <p2> ...)] ...
+    if len(lt.tokens) < 3:
         raise ParseError(f"Invalid task statement on line {lt.line_no}")
-    if lt.tokens[2] != "...":
+    if lt.tokens[-1] != "...":
         raise ParseError(f"Expected '...' to start task block on line {lt.line_no}")
+
     name = lt.tokens[1]
+    params: List[str] = []
+    if len(lt.tokens) == 3:
+        # task <name> ...
+        pass
+    else:
+        # task <name> with ... ...
+        if lt.tokens[2] != "with":
+            raise ParseError(f"Invalid task statement on line {lt.line_no}. Did you mean: task {name} with x ...")
+        params = _parse_param_list(lt.tokens[3:-1], lt.line_no)
 
     body, next_i = _parse_block(lines, i + 1, stop_at_end=True)
-    return TaskDefStmt(name=name, body=body, line_no=lt.line_no), next_i
+    return TaskDefStmt(name=name, params=params, body=body, line_no=lt.line_no), next_i
+
+
+def _parse_param_list(tokens: Sequence[str], line_no: int) -> List[str]:
+    if not tokens:
+        raise ParseError(f"Invalid parameter list on line {line_no}")
+    params: List[str] = []
+    i = 0
+    expect_name = True
+    while i < len(tokens):
+        tok = tokens[i]
+        if expect_name:
+            if tok == "and":
+                raise ParseError(f"Invalid parameter list on line {line_no}")
+            params.append(tok)
+            expect_name = False
+            i += 1
+            continue
+        # expecting 'and' or end
+        if tok != "and":
+            raise ParseError(f"Invalid parameter list on line {line_no}. Use 'and' between parameter names")
+        expect_name = True
+        i += 1
+
+    if expect_name:
+        raise ParseError(f"Invalid parameter list on line {line_no}")
+    return params
+
+
+def _parse_arg_list(tokens: Sequence[str], line_no: int) -> List[Expr]:
+    if not tokens:
+        raise ParseError(f"Invalid argument list on line {line_no}")
+    args: List[Expr] = []
+    i = 0
+    while i < len(tokens):
+        if tokens[i] == "and":
+            raise ParseError(f"Invalid argument list on line {line_no}")
+
+        # Arguments are single-token expressions for now (number/string/var)
+        args.append(_parse_expr_from_tokens([tokens[i]], line_no))
+        i += 1
+
+        if i >= len(tokens):
+            break
+        if tokens[i] != "and":
+            raise ParseError(f"Invalid argument list on line {line_no}. Use 'and' between arguments")
+        i += 1
+
+    return args
 
 
 def _parse_expr_from_tokens(tokens: Sequence[str], line_no: int) -> Expr:
+    # Multi-token list helpers
+    # first item of <listname>
+    if len(tokens) == 4 and tokens[0] == "first" and tokens[1] == "item" and tokens[2] == "of":
+        return ListAccessExpr(kind="first", list_name=tokens[3])
+    if len(tokens) == 4 and tokens[0] == "last" and tokens[1] == "item" and tokens[2] == "of":
+        return ListAccessExpr(kind="last", list_name=tokens[3])
+    if len(tokens) == 3 and tokens[0] == "count" and tokens[1] == "of":
+        return CountOfExpr(list_name=tokens[2])
+    if len(tokens) == 2 and tokens[0] == "all":
+        # used by: show all fruits
+        return VarRef(name=tokens[1])
+
+    # random between <low> and <high>
+    if (
+        len(tokens) >= 5
+        and tokens[0] == "random"
+        and tokens[1] == "between"
+        and "and" in tokens[2:]
+    ):
+        and_i = tokens.index("and", 2)
+        low_tokens = tokens[2:and_i]
+        high_tokens = tokens[and_i + 1 :]
+        if not low_tokens or not high_tokens:
+            raise ParseError(
+                f"Invalid random statement on line {line_no}. Example: set n to random between 1 and 10"
+            )
+        low = _parse_expr_from_tokens(low_tokens, line_no)
+        high = _parse_expr_from_tokens(high_tokens, line_no)
+        return RandomBetweenExpr(low=low, high=high)
+
+    # read from <filename>
+    if len(tokens) >= 3 and tokens[0] == "read" and tokens[1] == "from":
+        filename = _parse_expr_from_tokens(tokens[2:], line_no)
+        return ReadFromExpr(filename=filename)
+
+    # string operations: uppercase/lowercase/length of <expr>
+    if len(tokens) >= 3 and tokens[1] == "of" and tokens[0] in ("uppercase", "lowercase", "length"):
+        v = _parse_expr_from_tokens(tokens[2:], line_no)
+        return StringOpExpr(op=tokens[0], value=v)
+
     # Handle binary operations: <expr> <op> <expr>
     if len(tokens) >= 3:
+        # list literal: list a b c
+        if tokens[0] == "list":
+            items = [_parse_expr_from_tokens([t], line_no) for t in tokens[1:]]
+            return ListLiteral(items=items)
+
+        # run <task> with <arg1> (and <arg2> ...)
+        if tokens[0] == "run" and len(tokens) >= 4 and tokens[2] == "with":
+            task_name = tokens[1]
+            args = _parse_arg_list(tokens[3:], line_no)
+            return RunTaskExpr(task_name=task_name, args=args)
+
         # String join: <expr> joined with <expr>
         for i in range(len(tokens) - 1):
             if tokens[i] == "joined" and tokens[i + 1] == "with":

@@ -30,7 +30,28 @@ def lex(source: str) -> List[LineTokens]:
 
     lines: List[LineTokens] = []
     for idx, raw_line in enumerate(source.splitlines(), start=1):
-        line = raw_line.strip()
+        raw = raw_line.rstrip("\n")
+        line = raw.strip()
+        if not line:
+            continue
+
+        # Comments: ignore lines starting with # (after whitespace)
+        if line.startswith("#"):
+            continue
+
+        # Strip inline comments: everything after #, unless inside quotes
+        cleaned_chars: List[str] = []
+        in_quotes = False
+        for ch in raw:
+            if ch == '"':
+                in_quotes = not in_quotes
+                cleaned_chars.append(ch)
+                continue
+            if ch == "#" and not in_quotes:
+                break
+            cleaned_chars.append(ch)
+
+        line = "".join(cleaned_chars).strip()
         if not line:
             continue
 
@@ -39,6 +60,11 @@ def lex(source: str) -> List[LineTokens]:
         while i < len(line):
             ch = line[i]
             if ch.isspace():
+                i += 1
+                continue
+
+            if ch == ",":
+                tokens.append(",")
                 i += 1
                 continue
 
@@ -54,7 +80,7 @@ def lex(source: str) -> List[LineTokens]:
 
             # normal token
             j = i
-            while j < len(line) and (not line[j].isspace()):
+            while j < len(line) and (not line[j].isspace()) and line[j] != ",":
                 j += 1
             tokens.append(line[i:j])
             i = j
