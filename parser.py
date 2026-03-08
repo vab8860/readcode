@@ -39,6 +39,12 @@ class DoStmt(Stmt):
 
 
 @dataclass(frozen=True)
+class AskStmt(Stmt):
+    name: str
+    line_no: int
+
+
+@dataclass(frozen=True)
 class IfStmt(Stmt):
     condition: "Condition"
     body: List[Stmt]
@@ -140,6 +146,8 @@ def _parse_stmt(lines: Sequence[LineTokens], i: int) -> Tuple[Stmt, int]:
         return _parse_show(lt), i + 1
     if head == "do":
         return _parse_do(lt), i + 1
+    if head == "ask":
+        return _parse_ask(lt), i + 1
 
     if head == "if":
         return _parse_if(lines, i)
@@ -186,6 +194,13 @@ def _parse_do(lt: LineTokens) -> DoStmt:
     if len(lt.tokens) != 2:
         raise ParseError(f"Invalid do statement on line {lt.line_no}")
     return DoStmt(task_name=lt.tokens[1], line_no=lt.line_no)
+
+
+def _parse_ask(lt: LineTokens) -> AskStmt:
+    # ask <name>
+    if len(lt.tokens) != 2:
+        raise ParseError(f"Invalid ask statement on line {lt.line_no}")
+    return AskStmt(name=lt.tokens[1], line_no=lt.line_no)
 
 
 def _parse_if(lines: Sequence[LineTokens], i: int) -> Tuple[IfStmt, int]:

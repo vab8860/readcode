@@ -1,0 +1,11 @@
+ask name
+show hello name
+
+ask age
+set age to age
+
+if the age is 18 ...
+show you are adult
+else ...
+show you are minor
+and end

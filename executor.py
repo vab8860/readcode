@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Union
 
 from parser import (
+    AskStmt,
     BinaryOp,
     Condition,
     DoStmt,
@@ -48,6 +49,15 @@ def _exec_block(statements: List[Any], env: Environment) -> None:
 def _exec_stmt(st: Any, env: Environment) -> None:
     if isinstance(st, SetStmt):
         env.variables[st.name] = _eval_expr(st.value, env)
+        return
+
+    if isinstance(st, AskStmt):
+        raw = input(f"{st.name}: ")
+        s = raw.strip()
+        if s.isdigit() or (s.startswith("-") and s[1:].isdigit()):
+            env.variables[st.name] = int(s)
+        else:
+            env.variables[st.name] = s
         return
 
     if isinstance(st, ShowStmt):
