@@ -38,6 +38,20 @@ class RuntimeErrorRC(Exception):
     pass
 
 
+def _undefined_name_error(name: str, *, line_no: int | None) -> RuntimeErrorRC:
+    if line_no is None:
+        return RuntimeErrorRC(
+            f"Oops! '{name}' is not defined. "
+            f"Did you mean to write it as text? Use quotes: set something to \"{name}\" "
+            f"Or did you forget to create it first? Example: set {name} to 10"
+        )
+    return RuntimeErrorRC(
+        f"Oops! '{name}' is not defined on line {line_no}.\n"
+        f"Did you mean to write it as text? Use quotes: set something to \"{name}\"\n"
+        f"Or did you forget to create it first? Example: set {name} to 10"
+    )
+
+
 Value = Union[int, str, list]
 
 
@@ -177,10 +191,7 @@ def _exec_stmt(st: Any, env: Environment) -> None:
 def _eval_condition(cond: Condition, env: Environment, *, line_no: int | None = None) -> bool:
     left = env.variables.get(cond.name)
     if left is None:
-        raise RuntimeErrorRC(
-            f"Oops! Variable '{cond.name}' not found. Did you forget to set it? "
-            f"Example: set {cond.name} to 18"
-        )
+        raise _undefined_name_error(cond.name, line_no=line_no)
     right = _eval_expr(cond.right, env)
 
     # If one side is int and the other is a numeric string, coerce.
@@ -224,10 +235,7 @@ def _eval_expr(expr: Expr, env: Environment, *, line_no: int | None = None) -> A
         return expr.value
     if isinstance(expr, VarRef):
         if expr.name not in env.variables:
-            raise RuntimeErrorRC(
-                f"Oops! Variable '{expr.name}' not found. Did you forget to set it? "
-                f"Example: set {expr.name} to John"
-            )
+            raise _undefined_name_error(expr.name, line_no=line_no)
         return env.variables[expr.name]
     if isinstance(expr, ListLiteral):
         return [_eval_expr(it, env, line_no=line_no) for it in expr.items]

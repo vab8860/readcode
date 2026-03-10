@@ -1,0 +1,20 @@
+create page "Design Features"
+
+use theme "modern"
+use font "Poppins"
+
+set font color to "#ffffff"
+set background gradient "#0b1020" to "#3b1d5a" direction "diagonal"
+
+add heading "Design Layer Demo" size "48" color "white" bold yes shadow yes
+add paragraph "This page demonstrates themes, Google Fonts, Font Awesome icons, gradients, and effects." size "16" color "#d0d0d0"
+
+add icon "home" size "26" color "white"
+add icon "search" size "24" color "white"
+add icon "heart" size "22" color "#ff3366"
+
+add button "Gradient Button" gradient "#ff0033" to "#ff9a3d" radius "12" width "240" shadow "0 12px 30px rgba(0,0,0,0.45)"
+
+add card "Glowing Card" with image "https://picsum.photos/640/360?random=77" with link "index.html" by "ReadCode Studio" views "42K views" time "today" duration "3:21" glow "#4cc9f0" radius "14" padding "0" hover background "#1a1a1a"
+
+show page

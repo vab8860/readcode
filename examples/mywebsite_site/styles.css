@@ -1,0 +1,110 @@
+:root {
+  --bg: blue;
+  --fg: white;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+  background: var(--bg);
+  color: var(--fg);
+}
+
+.container {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 32px 20px;
+}
+
+.navbar {
+  position: sticky;
+  top: 0;
+  background: rgba(0,0,0,0.25);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid rgba(255,255,255,0.15);
+}
+
+.navbar .inner {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 12px 20px;
+  display: flex;
+  gap: 14px;
+  align-items: center;
+}
+
+.navbar a {
+  color: var(--fg);
+  text-decoration: none;
+  padding: 8px 10px;
+  border-radius: 8px;
+}
+
+.navbar a:hover {
+  background: rgba(255,255,255,0.12);
+}
+
+h1 {
+  margin: 0 0 14px 0;
+  font-size: 40px;
+  letter-spacing: -0.02em;
+}
+
+p {
+  margin: 10px 0;
+  opacity: 0.95;
+  line-height: 1.6;
+}
+
+.buttons {
+  margin-top: 18px;
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+button.rc-btn {
+  background: rgba(255,255,255,0.18);
+  color: var(--fg);
+  border: 1px solid rgba(255,255,255,0.28);
+  border-radius: 12px;
+  padding: 10px 14px;
+  cursor: pointer;
+}
+
+button.rc-btn:hover {
+  background: rgba(255,255,255,0.25);
+}
+
+.card {
+  margin-top: 28px;
+  padding: 18px;
+  border: 1px solid rgba(255,255,255,0.18);
+  border-radius: 16px;
+  background: rgba(0,0,0,0.18);
+}
+
+form {
+  display: grid;
+  gap: 12px;
+}
+
+label {
+  display: grid;
+  gap: 6px;
+  font-weight: 600;
+}
+
+input {
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(255,255,255,0.25);
+  background: rgba(255,255,255,0.10);
+  color: var(--fg);
+}
+
+small.hint {
+  opacity: 0.8;
+}

@@ -1,0 +1,26 @@
+create page "PWA Demo"
+
+make page mobile friendly
+make page installable
+add app icon "icon.png"
+add app name "My App"
+add splash screen color "#0f0f0f"
+
+use theme "dark"
+use font "Roboto"
+
+add meta description "My awesome website"
+add meta keywords "readcode, website"
+
+set background gradient "#0b0b0b" to "#1f0f3b" direction "diagonal"
+
+add heading "PWA + Mobile Demo" size "44" color "white" bold yes shadow yes
+add paragraph "This page is mobile responsive and installable as a PWA." size "16" color "#aaaaaa"
+
+add grid 3 columns gap "16"
+add card "Card A" with image "https://picsum.photos/640/360?random=101" with link "index.html" by "ReadCode" views "10K views" time "today" duration "2:10" radius "14" padding "0" hover background "#1a1a1a"
+add card "Card B" with image "https://picsum.photos/640/360?random=102" with link "index.html" by "ReadCode" views "12K views" time "today" duration "3:05" radius "14" padding "0" hover background "#1a1a1a"
+add card "Card C" with image "https://picsum.photos/640/360?random=103" with link "index.html" by "ReadCode" views "9K views" time "today" duration "1:47" radius "14" padding "0" hover background "#1a1a1a"
+end grid
+
+show page
