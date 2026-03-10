@@ -4,6 +4,11 @@ import argparse
 from pathlib import Path
 import sys
 
+
+_THIS_DIR = Path(__file__).resolve().parent
+if str(_THIS_DIR) not in sys.path:
+    sys.path.insert(0, str(_THIS_DIR))
+
 from executor import RuntimeErrorRC, execute
 from lexer import LexError, lex
 from parser import ParseError, parse
@@ -28,6 +33,24 @@ def main(argv: list[str] | None = None) -> int:
             html_path = generate_from_source(src, out_dir=out_dir)
             open_in_browser(html_path)
             return 0
+
+        # Server mode: start a Flask server if the file uses the server DSL
+        if "create server on port" in src.lower():
+            try:
+                from server_generator import ServerGenError, start_from_source as start_server_from_source
+            except ModuleNotFoundError:
+                print(
+                    "server_generator.py is not available in your installed ReadCode environment. "
+                    "Reinstall ReadCode (e.g. pip install -e .) or run: python run.py <file>.read",
+                    file=sys.stderr,
+                )
+                return 1
+            try:
+                start_server_from_source(src, base_dir=src_path.parent, run=True)
+                return 0
+            except ServerGenError as e:
+                print(str(e), file=sys.stderr)
+                return 1
 
         lines = lex(src)
         program = parse(lines)

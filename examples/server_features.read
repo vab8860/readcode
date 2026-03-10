@@ -1,0 +1,26 @@
+create server on port 3000
+
+connect to database "mydb"
+save to database "users" name "John" age 25
+get from database "users" where name is "John"
+delete from database "users" where name is "John"
+
+create login system
+add user "admin" password "1234"
+protect endpoint "/dashboard"
+end login system
+
+create endpoint "/users" method "GET"
+show all users
+end endpoint
+
+create endpoint "/login" method "POST"
+ask username
+ask password
+check if username is "admin" and password is "1234"
+say "Login successful"
+end endpoint
+
+create endpoint "/dashboard" method "GET"
+say "Welcome to dashboard"
+end endpoint
