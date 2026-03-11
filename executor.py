@@ -1,22 +1,31 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 import random
+import urllib.request
 from typing import Any, Dict, List, Optional, Union
 
+from lexer import lex
 from parser import (
     AddToListStmt,
     AskStmt,
+    AsyncBlockStmt,
     BinaryOp,
     CountOfExpr,
     Condition,
     DoStmt,
+    DoMethodStmt,
     Expr,
+    FetchStmt,
     IfStmt,
+    ImportStmt,
     ListAccessExpr,
     ListLiteral,
     MultiSetStmt,
+    NewObjectExpr,
     NumberLiteral,
+    ObjectDefStmt,
     Program,
     RandomBetweenExpr,
     ReadFromExpr,
@@ -24,13 +33,17 @@ from parser import (
     RunTaskExpr,
     RepeatStmt,
     SaveStmt,
+    SetAttrStmt,
     SetStmt,
     ShowStmt,
     StringOpExpr,
     StringLiteral,
     TaskDefStmt,
+    TryCatchStmt,
     WhileStmt,
+    AttrRefExpr,
     VarRef,
+    parse,
 )
 
 
@@ -52,35 +65,63 @@ def _undefined_name_error(name: str, *, line_no: int | None) -> RuntimeErrorRC:
     )
 
 
-Value = Union[int, str, list]
+Value = Union[int, str, list, dict]
+
+
+@dataclass
+class ClassDef:
+    name: str
+    properties: List[str]
+    methods: Dict[str, TaskDefStmt]
+
+
+@dataclass
+class ObjectInstance:
+    class_name: str
+    attrs: Dict[str, Value]
 
 
 @dataclass
 class Environment:
     variables: Dict[str, Value] = field(default_factory=dict)
     tasks: Dict[str, TaskDefStmt] = field(default_factory=dict)
+    classes: Dict[str, ClassDef] = field(default_factory=dict)
+    imported_modules: Dict[str, bool] = field(default_factory=dict)
 
 
-def execute(program: Program, *, env: Optional[Environment] = None) -> Environment:
+def execute(program: Program, *, env: Optional[Environment] = None, base_dir: str | Path | None = None) -> Environment:
     if env is None:
         env = Environment()
-    _exec_block(program.statements, env)
+    if base_dir is None:
+        base = Path.cwd()
+    else:
+        base = Path(base_dir)
+    _exec_block(program.statements, env, base_dir=base)
     return env
 
 
-def _exec_block(statements: List[Any], env: Environment) -> None:
+def _exec_block(statements: List[Any], env: Environment, *, base_dir: Path) -> None:
     for st in statements:
-        _exec_stmt(st, env)
+        _exec_stmt(st, env, base_dir=base_dir)
 
 
-def _exec_stmt(st: Any, env: Environment) -> None:
+def _exec_stmt(st: Any, env: Environment, *, base_dir: Path) -> None:
     if isinstance(st, SetStmt):
-        env.variables[st.name] = _eval_expr(st.value, env, line_no=st.line_no)
+        env.variables[st.name] = _eval_expr(st.value, env, line_no=st.line_no, base_dir=base_dir)
         return
 
     if isinstance(st, MultiSetStmt):
         for name, expr in zip(st.names, st.values):
-            env.variables[name] = _eval_expr(expr, env, line_no=st.line_no)
+            env.variables[name] = _eval_expr(expr, env, line_no=st.line_no, base_dir=base_dir)
+        return
+
+    if isinstance(st, SetAttrStmt):
+        if st.obj_name not in env.variables:
+            raise _undefined_name_error(st.obj_name, line_no=st.line_no)
+        obj = env.variables[st.obj_name]
+        if not isinstance(obj, ObjectInstance):
+            raise RuntimeErrorRC(f"Oops! '{st.obj_name}' is not an object on line {st.line_no}.")
+        obj.attrs[st.attr] = _eval_expr(st.value, env, line_no=st.line_no, base_dir=base_dir)
         return
 
     if isinstance(st, AskStmt):
@@ -100,8 +141,76 @@ def _exec_stmt(st: Any, env: Environment) -> None:
                 print(" ".join(str(x) for x in v))
                 return
 
-        vals = [_eval_expr(p, env) for p in st.parts]
+        vals = [_eval_expr(p, env, base_dir=base_dir) for p in st.parts]
         print(" ".join(str(v) for v in vals))
+        return
+
+    if isinstance(st, ImportStmt):
+        _exec_import(st, env, base_dir=base_dir)
+        return
+
+    if isinstance(st, TryCatchStmt):
+        try:
+            _exec_block(st.body, env, base_dir=base_dir)
+        except (RuntimeErrorRC, OSError, ValueError, ZeroDivisionError):
+            _exec_block(st.catch_body, env, base_dir=base_dir)
+        return
+
+    if isinstance(st, ObjectDefStmt):
+        methods: Dict[str, TaskDefStmt] = {}
+        for m in st.methods:
+            methods[m.name] = TaskDefStmt(name=m.name, params=[], body=m.body, line_no=m.line_no)
+        env.classes[st.name] = ClassDef(name=st.name, properties=list(st.properties), methods=methods)
+        return
+
+    if isinstance(st, DoMethodStmt):
+        if st.obj_name not in env.variables:
+            raise _undefined_name_error(st.obj_name, line_no=st.line_no)
+        obj = env.variables[st.obj_name]
+        if not isinstance(obj, ObjectInstance):
+            raise RuntimeErrorRC(f"Oops! '{st.obj_name}' is not an object on line {st.line_no}.")
+        cls = env.classes.get(obj.class_name)
+        if cls is None:
+            raise RuntimeErrorRC(f"Oops! Class '{obj.class_name}' not found for object '{st.obj_name}' on line {st.line_no}.")
+        method = cls.methods.get(st.method_name)
+        if method is None:
+            raise RuntimeErrorRC(f"Oops! Method '{st.method_name}' not found on '{obj.class_name}' on line {st.line_no}.")
+
+        # Evaluate args in current scope
+        arg_vals: List[Value] = [_eval_expr(a, env, line_no=st.line_no, base_dir=base_dir) for a in st.args]
+        if len(arg_vals) != 0:
+            # reserved for future: positional args
+            pass
+
+        # Local scope: variables + object attrs available directly by name, and self refers to object
+        old_vars = env.variables
+        local_vars = dict(old_vars)
+        local_vars["self"] = obj
+        for k, v in obj.attrs.items():
+            local_vars[k] = v
+        env.variables = local_vars
+        try:
+            _exec_block(method.body, env, base_dir=base_dir)
+        except _ReturnSignal:
+            pass
+        finally:
+            # persist any property updates back into object attrs
+            for prop in cls.properties:
+                if prop in env.variables:
+                    obj.attrs[prop] = env.variables[prop]
+            env.variables = old_vars
+        return
+
+    if isinstance(st, AsyncBlockStmt):
+        # Implementation: run sequentially for now (future: true concurrency)
+        _exec_block(st.body, env, base_dir=base_dir)
+        return
+
+    if isinstance(st, FetchStmt):
+        url_val = _eval_expr(st.url, env, line_no=st.line_no, base_dir=base_dir)
+        if not isinstance(url_val, str):
+            raise RuntimeErrorRC(f"Oops! fetch needs a URL text on line {st.line_no}.")
+        env.variables["data"] = _fetch_url(url_val, line_no=st.line_no)
         return
 
     if isinstance(st, AddToListStmt):
@@ -135,18 +244,18 @@ def _exec_stmt(st: Any, env: Environment) -> None:
         return
 
     if isinstance(st, ReturnStmt):
-        value = _eval_expr(st.value, env, line_no=st.line_no)
+        value = _eval_expr(st.value, env, line_no=st.line_no, base_dir=base_dir)
         raise _ReturnSignal(value)
 
     if isinstance(st, IfStmt):
         if _eval_condition(st.condition, env, line_no=st.line_no):
-            _exec_block(st.body, env)
+            _exec_block(st.body, env, base_dir=base_dir)
         elif st.else_body is not None:
-            _exec_block(st.else_body, env)
+            _exec_block(st.else_body, env, base_dir=base_dir)
         return
 
     if isinstance(st, RepeatStmt):
-        times_val = _eval_expr(st.times, env, line_no=st.line_no)
+        times_val = _eval_expr(st.times, env, line_no=st.line_no, base_dir=base_dir)
         if not isinstance(times_val, int):
             raise RuntimeErrorRC(
                 f"Oops! 'repeat' needs a number on line {st.line_no}. Example: repeat 5 times ..."
@@ -156,13 +265,13 @@ def _exec_stmt(st: Any, env: Environment) -> None:
                 f"Oops! 'repeat' can't use a negative number on line {st.line_no}."
             )
         for _ in range(times_val):
-            _exec_block(st.body, env)
+            _exec_block(st.body, env, base_dir=base_dir)
         return
 
     if isinstance(st, WhileStmt):
         guard = 0
         while _eval_condition(st.condition, env, line_no=st.line_no):
-            _exec_block(st.body, env)
+            _exec_block(st.body, env, base_dir=base_dir)
             guard += 1
             if guard > 1_000_000:
                 raise RuntimeErrorRC(
@@ -180,7 +289,7 @@ def _exec_stmt(st: Any, env: Environment) -> None:
                 f"Oops! Task '{st.task_name}' not found on line {st.line_no}. "
                 f"Did you forget to define it? Example: task {st.task_name} ..."
             )
-        _call_task(env, st.task_name, st.args, line_no=st.line_no)
+        _call_task(env, st.task_name, st.args, line_no=st.line_no, base_dir=base_dir)
         return
 
     raise RuntimeErrorRC(
@@ -228,7 +337,11 @@ def _eval_condition(cond: Condition, env: Environment, *, line_no: int | None = 
     raise RuntimeErrorRC(f"Unknown comparison operator: {cond.op}")
 
 
-def _eval_expr(expr: Expr, env: Environment, *, line_no: int | None = None) -> Any:
+def _eval_expr(expr: Expr, env: Environment, *, line_no: int | None = None, base_dir: Path | None = None) -> Any:
+    if base_dir is None:
+        base = Path.cwd()
+    else:
+        base = base_dir
     if isinstance(expr, StringLiteral):
         return expr.value
     if isinstance(expr, NumberLiteral):
@@ -237,8 +350,23 @@ def _eval_expr(expr: Expr, env: Environment, *, line_no: int | None = None) -> A
         if expr.name not in env.variables:
             raise _undefined_name_error(expr.name, line_no=line_no)
         return env.variables[expr.name]
+    if isinstance(expr, AttrRefExpr):
+        if expr.obj_name not in env.variables:
+            raise _undefined_name_error(expr.obj_name, line_no=line_no)
+        obj = env.variables[expr.obj_name]
+        if not isinstance(obj, ObjectInstance):
+            raise RuntimeErrorRC(f"Oops! '{expr.obj_name}' is not an object.")
+        if expr.attr not in obj.attrs:
+            return ""
+        return obj.attrs[expr.attr]
+    if isinstance(expr, NewObjectExpr):
+        cls = env.classes.get(expr.class_name)
+        if cls is None:
+            raise RuntimeErrorRC(f"Oops! Class '{expr.class_name}' not found.")
+        attrs: Dict[str, Value] = {p: "" for p in cls.properties}
+        return ObjectInstance(class_name=cls.name, attrs=attrs)
     if isinstance(expr, ListLiteral):
-        return [_eval_expr(it, env, line_no=line_no) for it in expr.items]
+        return [_eval_expr(it, env, line_no=line_no, base_dir=base) for it in expr.items]
     if isinstance(expr, ListAccessExpr):
         if expr.list_name not in env.variables:
             raise RuntimeErrorRC(
@@ -265,8 +393,8 @@ def _eval_expr(expr: Expr, env: Environment, *, line_no: int | None = None) -> A
         return len(v)
 
     if isinstance(expr, RandomBetweenExpr):
-        low_val = _eval_expr(expr.low, env, line_no=line_no)
-        high_val = _eval_expr(expr.high, env, line_no=line_no)
+        low_val = _eval_expr(expr.low, env, line_no=line_no, base_dir=base)
+        high_val = _eval_expr(expr.high, env, line_no=line_no, base_dir=base)
         if not isinstance(low_val, int) or not isinstance(high_val, int):
             if line_no is not None:
                 raise RuntimeErrorRC(
@@ -280,7 +408,7 @@ def _eval_expr(expr: Expr, env: Environment, *, line_no: int | None = None) -> A
         return random.randint(low_val, high_val)
 
     if isinstance(expr, ReadFromExpr):
-        filename_val = _eval_expr(expr.filename, env, line_no=line_no)
+        filename_val = _eval_expr(expr.filename, env, line_no=line_no, base_dir=base)
         if not isinstance(filename_val, str):
             if line_no is not None:
                 raise RuntimeErrorRC(
@@ -300,7 +428,7 @@ def _eval_expr(expr: Expr, env: Environment, *, line_no: int | None = None) -> A
             raise RuntimeErrorRC(f"Oops! I couldn't read from '{filename_val}'.")
 
     if isinstance(expr, StringOpExpr):
-        v = _eval_expr(expr.value, env, line_no=line_no)
+        v = _eval_expr(expr.value, env, line_no=line_no, base_dir=base)
         if expr.op == "length":
             return len(str(v))
         s = str(v)
@@ -310,8 +438,8 @@ def _eval_expr(expr: Expr, env: Environment, *, line_no: int | None = None) -> A
             return s.lower()
         raise RuntimeErrorRC(f"Oops! Unknown string operation: {expr.op}")
     if isinstance(expr, BinaryOp):
-        left = _eval_expr(expr.left, env, line_no=line_no)
-        right = _eval_expr(expr.right, env, line_no=line_no)
+        left = _eval_expr(expr.left, env, line_no=line_no, base_dir=base)
+        right = _eval_expr(expr.right, env, line_no=line_no, base_dir=base)
         if expr.op == "joined_with":
             ls = str(left)
             rs = str(right)
@@ -341,7 +469,7 @@ def _eval_expr(expr: Expr, env: Environment, *, line_no: int | None = None) -> A
             raise RuntimeErrorRC(
                 f"Oops! Task '{expr.task_name}' not found. Did you forget to define it?"
             )
-        return _call_task(env, expr.task_name, expr.args, line_no=line_no)
+        return _call_task(env, expr.task_name, expr.args, line_no=line_no, base_dir=base)
     raise RuntimeErrorRC(
         f"Oops! I can't understand this expression yet: {type(expr).__name__}."
     )
@@ -352,7 +480,7 @@ class _ReturnSignal(Exception):
         self.value = value
 
 
-def _call_task(env: Environment, name: str, args: List[Expr], *, line_no: int | None) -> Value:
+def _call_task(env: Environment, name: str, args: List[Expr], *, line_no: int | None, base_dir: Path) -> Value:
     task = env.tasks.get(name)
     if task is None:
         raise RuntimeErrorRC(
@@ -365,7 +493,7 @@ def _call_task(env: Environment, name: str, args: List[Expr], *, line_no: int | 
         )
 
     # evaluate arguments in current scope
-    arg_vals: List[Value] = [_eval_expr(a, env, line_no=line_no) for a in args]
+    arg_vals: List[Value] = [_eval_expr(a, env, line_no=line_no, base_dir=base_dir) for a in args]
 
     # create local scope
     old_vars = env.variables
@@ -375,10 +503,41 @@ def _call_task(env: Environment, name: str, args: List[Expr], *, line_no: int | 
     env.variables = local_vars
 
     try:
-        _exec_block(task.body, env)
+        _exec_block(task.body, env, base_dir=base_dir)
     except _ReturnSignal as rs:
         return rs.value
     finally:
         env.variables = old_vars
 
     return ""
+
+
+def _exec_import(st: ImportStmt, env: Environment, *, base_dir: Path) -> None:
+    # Prevent re-import cycles
+    key = str((base_dir / st.path).resolve())
+    if env.imported_modules.get(key):
+        return
+    env.imported_modules[key] = True
+
+    mod_path = (base_dir / st.path).resolve()
+    try:
+        src = mod_path.read_text(encoding="utf-8")
+    except OSError:
+        raise RuntimeErrorRC(f"Oops! I couldn't import '{st.path}'. File not found.")
+
+    lines = lex(src)
+    program = parse(lines)
+    execute(program, env=env, base_dir=mod_path.parent)
+
+
+def _fetch_url(url: str, *, line_no: int) -> str:
+    print("Fetching data...")
+    try:
+        with urllib.request.urlopen(url, timeout=5) as resp:
+            raw = resp.read()
+            try:
+                return raw.decode("utf-8")
+            except Exception:
+                return raw.decode("latin-1", errors="replace")
+    except Exception as e:
+        raise RuntimeErrorRC(f"Oops! I couldn't fetch data from '{url}' on line {line_no}.") from e

@@ -54,7 +54,7 @@ def main(argv: list[str] | None = None) -> int:
 
         lines = lex(src)
         program = parse(lines)
-        execute(program)
+        execute(program, base_dir=src_path.parent)
         return 0
 
     except FileNotFoundError:

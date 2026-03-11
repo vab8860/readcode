@@ -1,0 +1,26 @@
+try ...
+set result to 10 divided by 0
+catch errors ...
+say "Something went wrong"
+and end
+
+# module import demo
+import "mymodule.read"
+do say_hi
+
+create object "Person"
+add property name
+add property age
+add method greet ...
+say "Hello" joined with name
+end method
+end object
+
+set john to new Person
+set john.name to "John"
+do john.greet
+
+run async ...
+fetch data from "https://example.com"
+say data
+end async

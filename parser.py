@@ -102,6 +102,62 @@ class MultiSetStmt(Stmt):
     line_no: int
 
 
+@dataclass(frozen=True)
+class ImportStmt(Stmt):
+    path: str
+    line_no: int
+
+
+@dataclass(frozen=True)
+class TryCatchStmt(Stmt):
+    body: List[Stmt]
+    catch_body: List[Stmt]
+    line_no: int
+
+
+@dataclass(frozen=True)
+class MethodDef:
+    name: str
+    body: List[Stmt]
+    line_no: int
+
+
+@dataclass(frozen=True)
+class ObjectDefStmt(Stmt):
+    name: str
+    properties: List[str]
+    methods: List[MethodDef]
+    line_no: int
+
+
+@dataclass(frozen=True)
+class SetAttrStmt(Stmt):
+    obj_name: str
+    attr: str
+    value: "Expr"
+    line_no: int
+
+
+@dataclass(frozen=True)
+class DoMethodStmt(Stmt):
+    obj_name: str
+    method_name: str
+    args: List["Expr"]
+    line_no: int
+
+
+@dataclass(frozen=True)
+class AsyncBlockStmt(Stmt):
+    body: List[Stmt]
+    line_no: int
+
+
+@dataclass(frozen=True)
+class FetchStmt(Stmt):
+    url: "Expr"
+    line_no: int
+
+
 class Expr:
     pass
 
@@ -119,6 +175,17 @@ class NumberLiteral(Expr):
 @dataclass(frozen=True)
 class VarRef(Expr):
     name: str
+
+
+@dataclass(frozen=True)
+class AttrRefExpr(Expr):
+    obj_name: str
+    attr: str
+
+
+@dataclass(frozen=True)
+class NewObjectExpr(Expr):
+    class_name: str
 
 
 @dataclass(frozen=True)
@@ -210,6 +277,22 @@ def _parse_block(
     return out, i
 
 
+def _parse_block_until(
+    lines: Sequence[LineTokens], start_i: int, *, end_tokens: Sequence[Sequence[str]], context_line_no: int
+) -> Tuple[List[Stmt], int]:
+    out: List[Stmt] = []
+    i = start_i
+    while i < len(lines):
+        lt = lines[i]
+        if any(lt.tokens == list(et) for et in end_tokens):
+            return out, i
+        stmt, i = _parse_stmt(lines, i)
+        out.append(stmt)
+    raise ParseError(
+        f"Oops! You forgot to close your block started on line {context_line_no}."
+    )
+
+
 def _parse_stmt(lines: Sequence[LineTokens], i: int) -> Tuple[Stmt, int]:
     lt = lines[i]
     toks = lt.tokens
@@ -223,6 +306,9 @@ def _parse_stmt(lines: Sequence[LineTokens], i: int) -> Tuple[Stmt, int]:
             to_i = toks.index("to")
             if "," in toks[1:to_i]:
                 return _parse_multi_set(lt), i + 1
+        # attribute assignment: set obj.prop to <expr>
+        if len(toks) >= 4 and toks[2] == "to" and "." in toks[1]:
+            return _parse_set_attr(lt), i + 1
         return _parse_set(lt), i + 1
     if head == "let":
         return _parse_let(lt), i + 1
@@ -231,6 +317,8 @@ def _parse_stmt(lines: Sequence[LineTokens], i: int) -> Tuple[Stmt, int]:
     if head == "say":
         return _parse_say(lt), i + 1
     if head == "do":
+        if len(toks) >= 2 and "." in toks[1]:
+            return _parse_do_method(lt), i + 1
         return _parse_do(lt), i + 1
     if head == "ask":
         return _parse_ask(lt), i + 1
@@ -254,6 +342,21 @@ def _parse_stmt(lines: Sequence[LineTokens], i: int) -> Tuple[Stmt, int]:
 
     if head == "save":
         return _parse_save(lt), i + 1
+
+    if head == "import":
+        return _parse_import(lt), i + 1
+
+    if head == "try":
+        return _parse_try_catch(lines, i)
+
+    if head == "create" and len(toks) >= 3 and toks[1] == "object":
+        return _parse_object(lines, i)
+
+    if head == "run" and toks[:2] == ["run", "async"]:
+        return _parse_async(lines, i)
+
+    if head == "fetch":
+        return _parse_fetch(lt), i + 1
 
     raise ParseError(
         f"Oops! I don't understand '{head}' on line {lt.line_no}. Check your spelling!"
@@ -285,6 +388,17 @@ def _parse_set(lt: LineTokens) -> SetStmt:
     value_tokens = lt.tokens[3:]
     value = _parse_expr_from_tokens(value_tokens, lt.line_no)
     return SetStmt(name=name, value=value, line_no=lt.line_no)
+
+
+def _parse_set_attr(lt: LineTokens) -> SetAttrStmt:
+    # set obj.prop to <expr>
+    if len(lt.tokens) < 4 or lt.tokens[2] != "to" or "." not in lt.tokens[1]:
+        raise ParseError(f"Invalid set statement on line {lt.line_no}")
+    obj_name, attr = lt.tokens[1].split(".", 1)
+    if not obj_name or not attr:
+        raise ParseError(f"Invalid property assignment on line {lt.line_no}. Example: set john.name to \"John\"")
+    value = _parse_expr_from_tokens(lt.tokens[3:], lt.line_no)
+    return SetAttrStmt(obj_name=obj_name, attr=attr, value=value, line_no=lt.line_no)
 
 
 def _parse_let(lt: LineTokens) -> SetStmt:
@@ -481,6 +595,115 @@ def _parse_do(lt: LineTokens) -> DoStmt:
     return DoStmt(task_name=name, args=args, line_no=lt.line_no)
 
 
+def _parse_do_method(lt: LineTokens) -> DoMethodStmt:
+    # do obj.method [with <args>]
+    if len(lt.tokens) < 2 or "." not in lt.tokens[1]:
+        raise ParseError(f"Invalid do statement on line {lt.line_no}")
+    obj_name, method_name = lt.tokens[1].split(".", 1)
+    if not obj_name or not method_name:
+        raise ParseError(f"Invalid method call on line {lt.line_no}. Example: do john.greet")
+    args: List[Expr] = []
+    if len(lt.tokens) == 2:
+        return DoMethodStmt(obj_name=obj_name, method_name=method_name, args=args, line_no=lt.line_no)
+    if lt.tokens[2] != "with":
+        raise ParseError(f"Invalid do statement on line {lt.line_no}. Did you mean: do {obj_name}.{method_name} with ...")
+    args = _parse_arg_list(lt.tokens[3:], lt.line_no)
+    return DoMethodStmt(obj_name=obj_name, method_name=method_name, args=args, line_no=lt.line_no)
+
+
+def _parse_import(lt: LineTokens) -> ImportStmt:
+    # import "file.read"
+    if len(lt.tokens) != 2:
+        raise ParseError(f"Invalid import on line {lt.line_no}. Example: import \"mymodule.read\"")
+    p = lt.tokens[1]
+    if not (p.startswith('"') and p.endswith('"')):
+        raise ParseError(f"Import path must be in quotes on line {lt.line_no}. Example: import \"mymodule.read\"")
+    return ImportStmt(path=p[1:-1], line_no=lt.line_no)
+
+
+def _parse_try_catch(lines: Sequence[LineTokens], i: int) -> Tuple[TryCatchStmt, int]:
+    lt = lines[i]
+    if lt.tokens != ["try", "..."]:
+        raise ParseError(f"Invalid try on line {lt.line_no}. Example: try ...")
+
+    body, next_i = _parse_block_until(lines, i + 1, end_tokens=[("catch", "errors", "...")], context_line_no=lt.line_no)
+    if next_i >= len(lines) or lines[next_i].tokens != ["catch", "errors", "..."]:
+        raise ParseError(f"Expected 'catch errors ...' after try block started on line {lt.line_no}")
+    catch_body, end_i = _parse_block(lines, next_i + 1, stop_at_end=True)
+    return TryCatchStmt(body=body, catch_body=catch_body, line_no=lt.line_no), end_i
+
+
+def _parse_object(lines: Sequence[LineTokens], i: int) -> Tuple[ObjectDefStmt, int]:
+    lt = lines[i]
+    # create object "Person"
+    if len(lt.tokens) != 3 or lt.tokens[0:2] != ["create", "object"]:
+        raise ParseError(f"Invalid object definition on line {lt.line_no}. Example: create object \"Person\"")
+    name_tok = lt.tokens[2]
+    if not (name_tok.startswith('"') and name_tok.endswith('"')):
+        raise ParseError(f"Object name must be in quotes on line {lt.line_no}. Example: create object \"Person\"")
+    obj_name = name_tok[1:-1]
+
+    properties: List[str] = []
+    methods: List[MethodDef] = []
+    j = i + 1
+    while j < len(lines):
+        cur = lines[j]
+        toks = cur.tokens
+        if toks == ["end", "object"]:
+            return ObjectDefStmt(name=obj_name, properties=properties, methods=methods, line_no=lt.line_no), j + 1
+
+        if toks[:2] == ["add", "property"]:
+            if len(toks) != 3:
+                raise ParseError(f"Invalid property on line {cur.line_no}. Example: add property name")
+            properties.append(toks[2])
+            j += 1
+            continue
+
+        if len(toks) == 4 and toks[0:2] == ["add", "method"] and toks[-1] == "...":
+            if len(toks) != 4:
+                raise ParseError(f"Invalid method definition on line {cur.line_no}. Example: add method greet ...")
+            m_name = toks[2]
+            m_body, next_j = _parse_block_until(
+                lines, j + 1, end_tokens=[("end", "method")], context_line_no=cur.line_no
+            )
+            if next_j >= len(lines) or lines[next_j].tokens != ["end", "method"]:
+                raise ParseError(f"Expected 'end method' for method started on line {cur.line_no}")
+            methods.append(MethodDef(name=m_name, body=m_body, line_no=cur.line_no))
+            j = next_j + 1
+            continue
+
+        raise ParseError(
+            f"Oops! I don't understand '{toks[0]}' inside object on line {cur.line_no}."
+        )
+
+    raise ParseError(f"Oops! You forgot to close your object started on line {lt.line_no} with 'end object'.")
+
+
+def _parse_async(lines: Sequence[LineTokens], i: int) -> Tuple[AsyncBlockStmt, int]:
+    lt = lines[i]
+    if lt.tokens != ["run", "async", "..."]:
+        raise ParseError(f"Invalid async block on line {lt.line_no}. Example: run async ...")
+    body, next_i = _parse_block_until(lines, i + 1, end_tokens=[("end", "async")], context_line_no=lt.line_no)
+    if next_i >= len(lines) or lines[next_i].tokens != ["end", "async"]:
+        raise ParseError(f"Expected 'end async' for async block started on line {lt.line_no}")
+    return AsyncBlockStmt(body=body, line_no=lt.line_no), next_i + 1
+
+
+def _parse_fetch(lt: LineTokens) -> FetchStmt:
+    # fetch data from "url"
+    if len(lt.tokens) < 4 or lt.tokens[1] != "data" or lt.tokens[2] != "from":
+        raise ParseError(f"Invalid fetch on line {lt.line_no}. Example: fetch data from \"https://example.com\"")
+    url = _parse_expr_from_tokens(lt.tokens[3:], lt.line_no)
+    return FetchStmt(url=url, line_no=lt.line_no)
+
+    if lt.tokens[2] != "with":
+        raise ParseError(f"Invalid do statement on line {lt.line_no}. Did you mean: do {name} with ...")
+
+    arg_tokens = lt.tokens[3:]
+    args = _parse_arg_list(arg_tokens, lt.line_no)
+    return DoStmt(task_name=name, args=args, line_no=lt.line_no)
+
+
 def _parse_return(lt: LineTokens) -> ReturnStmt:
     # give back <expr>
     if len(lt.tokens) < 3 or lt.tokens[1] != "back":
@@ -663,6 +886,10 @@ def _parse_arg_list(tokens: Sequence[str], line_no: int) -> List[Expr]:
 
 
 def _parse_expr_from_tokens(tokens: Sequence[str], line_no: int) -> Expr:
+    # object instantiation: new <ClassName>
+    if len(tokens) == 2 and tokens[0] == "new":
+        return NewObjectExpr(class_name=tokens[1])
+
     # Multi-token list helpers
     # first item of <listname>
     if len(tokens) == 4 and tokens[0] == "first" and tokens[1] == "item" and tokens[2] == "of":
@@ -753,6 +980,13 @@ def _parse_expr_from_tokens(tokens: Sequence[str], line_no: int) -> Expr:
         tok = tokens[0]
         if tok.startswith('"') and tok.endswith('"') and len(tok) >= 2:
             return StringLiteral(value=tok[1:-1])
+
+        # attribute reference: obj.prop
+        if "." in tok:
+            obj_name, attr = tok.split(".", 1)
+            if not obj_name or not attr:
+                raise ParseError(f"Invalid property reference on line {line_no}. Example: say john.name")
+            return AttrRefExpr(obj_name=obj_name, attr=attr)
 
         if tok.isdigit() or (tok.startswith("-") and tok[1:].isdigit()):
             return NumberLiteral(value=int(tok))
