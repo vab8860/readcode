@@ -158,6 +158,63 @@ class FetchStmt(Stmt):
     line_no: int
 
 
+@dataclass(frozen=True)
+class EmailStmt(Stmt):
+    to_addr: Expr
+    subject: Expr
+    message: Expr
+    line_no: int
+
+
+@dataclass(frozen=True)
+class CreateFileStmt(Stmt):
+    path: Expr
+    line_no: int
+
+
+@dataclass(frozen=True)
+class WriteFileStmt(Stmt):
+    content: Expr
+    path: Expr
+    line_no: int
+
+
+@dataclass(frozen=True)
+class ReadFileStmt(Stmt):
+    path: Expr
+    var_name: str
+    line_no: int
+
+
+@dataclass(frozen=True)
+class DeleteFileStmt(Stmt):
+    path: Expr
+    line_no: int
+
+
+@dataclass(frozen=True)
+class ListFilesStmt(Stmt):
+    path: Expr
+    line_no: int
+
+
+@dataclass(frozen=True)
+class ApiCallStmt(Stmt):
+    url: Expr
+    method: str
+    headers: List[tuple[str, Expr]]
+    params: List[tuple[str, Expr]]
+    store_var: Optional[str]
+    line_no: int
+
+
+@dataclass(frozen=True)
+class WebsocketStmt(Stmt):
+    port: int
+    on_message_body: List[Stmt]
+    line_no: int
+
+
 class Expr:
     pass
 
@@ -357,6 +414,26 @@ def _parse_stmt(lines: Sequence[LineTokens], i: int) -> Tuple[Stmt, int]:
 
     if head == "fetch":
         return _parse_fetch(lt), i + 1
+
+    if head == "send" and toks[:3] == ["send", "email", "to"]:
+        return _parse_email(lines, i)
+
+    if head == "create" and toks[:2] == ["create", "file"]:
+        return _parse_create_file(lt), i + 1
+    if head == "write":
+        return _parse_write_file(lt), i + 1
+    if head == "read" and toks[:2] == ["read", "file"]:
+        return _parse_read_file(lt), i + 1
+    if head == "delete" and toks[:2] == ["delete", "file"]:
+        return _parse_delete_file(lt), i + 1
+    if head == "list" and toks[:2] == ["list", "files"]:
+        return _parse_list_files(lt), i + 1
+
+    if head == "call" and toks[:2] == ["call", "api"]:
+        return _parse_api_call(lines, i)
+
+    if head == "create" and toks[:4] == ["create", "websocket", "on", "port"]:
+        return _parse_websocket(lines, i)
 
     raise ParseError(
         f"Oops! I don't understand '{head}' on line {lt.line_no}. Check your spelling!"
@@ -696,12 +773,152 @@ def _parse_fetch(lt: LineTokens) -> FetchStmt:
     url = _parse_expr_from_tokens(lt.tokens[3:], lt.line_no)
     return FetchStmt(url=url, line_no=lt.line_no)
 
-    if lt.tokens[2] != "with":
-        raise ParseError(f"Invalid do statement on line {lt.line_no}. Did you mean: do {name} with ...")
 
-    arg_tokens = lt.tokens[3:]
-    args = _parse_arg_list(arg_tokens, lt.line_no)
-    return DoStmt(task_name=name, args=args, line_no=lt.line_no)
+def _parse_email(lines: Sequence[LineTokens], i: int) -> Tuple[EmailStmt, int]:
+    lt = lines[i]
+    # send email to "addr"
+    if len(lt.tokens) != 4 or lt.tokens[:3] != ["send", "email", "to"]:
+        raise ParseError(f"Invalid email start on line {lt.line_no}. Example: send email to \"user@gmail.com\"")
+    to_addr = _parse_expr_from_tokens([lt.tokens[3]], lt.line_no)
+
+    j = i + 1
+    subject: Optional[Expr] = None
+    message: Optional[Expr] = None
+    while j < len(lines):
+        cur = lines[j]
+        toks = cur.tokens
+        if toks == ["end", "email"]:
+            if subject is None or message is None:
+                raise ParseError(f"Email block missing subject or message (started on line {lt.line_no}).")
+            return EmailStmt(to_addr=to_addr, subject=subject, message=message, line_no=lt.line_no), j + 1
+
+        if toks and toks[0] == "subject" and len(toks) == 2:
+            subject = _parse_expr_from_tokens([toks[1]], cur.line_no)
+            j += 1
+            continue
+        if toks and toks[0] == "message" and len(toks) == 2:
+            message = _parse_expr_from_tokens([toks[1]], cur.line_no)
+            j += 1
+            continue
+
+        raise ParseError(f"Oops! I don't understand '{toks[0]}' inside email on line {cur.line_no}.")
+
+    raise ParseError(f"Oops! You forgot to close your email started on line {lt.line_no} with 'end email'.")
+
+
+def _parse_create_file(lt: LineTokens) -> CreateFileStmt:
+    # create file "path"
+    if len(lt.tokens) != 3 or lt.tokens[:2] != ["create", "file"]:
+        raise ParseError(f"Invalid create file on line {lt.line_no}. Example: create file \"data.txt\"")
+    path = _parse_expr_from_tokens([lt.tokens[2]], lt.line_no)
+    return CreateFileStmt(path=path, line_no=lt.line_no)
+
+
+def _parse_write_file(lt: LineTokens) -> WriteFileStmt:
+    # write "Hello" to file "data.txt"
+    if len(lt.tokens) != 5 or lt.tokens[2] != "to" or lt.tokens[3] != "file":
+        raise ParseError(f"Invalid write file on line {lt.line_no}. Example: write \"Hello\" to file \"data.txt\"")
+    content = _parse_expr_from_tokens([lt.tokens[1]], lt.line_no)
+    path = _parse_expr_from_tokens([lt.tokens[4]], lt.line_no)
+    return WriteFileStmt(content=content, path=path, line_no=lt.line_no)
+
+
+def _parse_read_file(lt: LineTokens) -> ReadFileStmt:
+    # read file "x" into var
+    if len(lt.tokens) != 5 or lt.tokens[:2] != ["read", "file"] or lt.tokens[3] != "into":
+        raise ParseError(f"Invalid read file on line {lt.line_no}. Example: read file \"data.txt\" into content")
+    path = _parse_expr_from_tokens([lt.tokens[2]], lt.line_no)
+    return ReadFileStmt(path=path, var_name=lt.tokens[4], line_no=lt.line_no)
+
+
+def _parse_delete_file(lt: LineTokens) -> DeleteFileStmt:
+    # delete file "x"
+    if len(lt.tokens) != 3 or lt.tokens[:2] != ["delete", "file"]:
+        raise ParseError(f"Invalid delete file on line {lt.line_no}. Example: delete file \"data.txt\"")
+    path = _parse_expr_from_tokens([lt.tokens[2]], lt.line_no)
+    return DeleteFileStmt(path=path, line_no=lt.line_no)
+
+
+def _parse_list_files(lt: LineTokens) -> ListFilesStmt:
+    # list files in "folder"
+    if len(lt.tokens) != 4 or lt.tokens[:3] != ["list", "files", "in"]:
+        raise ParseError(f"Invalid list files on line {lt.line_no}. Example: list files in \"myfolder\"")
+    path = _parse_expr_from_tokens([lt.tokens[3]], lt.line_no)
+    return ListFilesStmt(path=path, line_no=lt.line_no)
+
+
+def _parse_api_call(lines: Sequence[LineTokens], i: int) -> Tuple[ApiCallStmt, int]:
+    lt = lines[i]
+    # call api "url"
+    if len(lt.tokens) != 3 or lt.tokens[:2] != ["call", "api"]:
+        raise ParseError(f"Invalid api call on line {lt.line_no}. Example: call api \"https://api.example.com\"")
+    url = _parse_expr_from_tokens([lt.tokens[2]], lt.line_no)
+
+    method = "GET"
+    headers: List[tuple[str, Expr]] = []
+    params: List[tuple[str, Expr]] = []
+    store_var: Optional[str] = None
+
+    j = i + 1
+    while j < len(lines):
+        cur = lines[j]
+        toks = cur.tokens
+        if not toks:
+            j += 1
+            continue
+        if toks[0] == "method" and len(toks) == 2:
+            m = _parse_expr_from_tokens([toks[1]], cur.line_no)
+            if not isinstance(m, StringLiteral):
+                raise ParseError(f"Method must be a quoted string on line {cur.line_no}. Example: method \"GET\"")
+            method = m.value
+            j += 1
+            continue
+        if toks[0] == "header" and len(toks) == 4 and toks[2] == "value":
+            k_expr = _parse_expr_from_tokens([toks[1]], cur.line_no)
+            if not isinstance(k_expr, StringLiteral):
+                raise ParseError(f"Header name must be text on line {cur.line_no}. Example: header \"Authorization\" value \"key\"")
+            v_expr = _parse_expr_from_tokens([toks[3]], cur.line_no)
+            headers.append((k_expr.value, v_expr))
+            j += 1
+            continue
+        if toks[0] == "parameter" and len(toks) == 4 and toks[2] == "value":
+            k_expr = _parse_expr_from_tokens([toks[1]], cur.line_no)
+            if not isinstance(k_expr, StringLiteral):
+                raise ParseError(f"Parameter name must be text on line {cur.line_no}. Example: parameter \"city\" value \"Delhi\"")
+            v_expr = _parse_expr_from_tokens([toks[3]], cur.line_no)
+            params.append((k_expr.value, v_expr))
+            j += 1
+            continue
+        if toks[:3] == ["store", "response", "in"] and len(toks) == 4:
+            store_var = toks[3]
+            j += 1
+            continue
+
+        break
+
+    return ApiCallStmt(url=url, method=method, headers=headers, params=params, store_var=store_var, line_no=lt.line_no), j
+
+
+def _parse_websocket(lines: Sequence[LineTokens], i: int) -> Tuple[WebsocketStmt, int]:
+    lt = lines[i]
+    # create websocket on port 8080
+    if len(lt.tokens) != 5 or lt.tokens[:4] != ["create", "websocket", "on", "port"]:
+        raise ParseError(f"Invalid websocket on line {lt.line_no}. Example: create websocket on port 8080")
+    port_tok = lt.tokens[4]
+    if not port_tok.isdigit():
+        raise ParseError(f"Websocket port must be a number on line {lt.line_no}.")
+    port = int(port_tok)
+
+    j = i + 1
+    if j >= len(lines) or lines[j].tokens != ["on", "message", "received", "..."]:
+        raise ParseError(f"Expected 'on message received ...' after websocket start on line {lt.line_no}.")
+
+    body, next_j = _parse_block_until(
+        lines, j + 1, end_tokens=[("end", "websocket")], context_line_no=lines[j].line_no
+    )
+    if next_j >= len(lines) or lines[next_j].tokens != ["end", "websocket"]:
+        raise ParseError(f"Expected 'end websocket' for websocket started on line {lt.line_no}.")
+    return WebsocketStmt(port=port, on_message_body=body, line_no=lt.line_no), next_j + 1
 
 
 def _parse_return(lt: LineTokens) -> ReturnStmt:

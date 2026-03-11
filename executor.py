@@ -11,6 +11,10 @@ from parser import (
     AddToListStmt,
     AskStmt,
     AsyncBlockStmt,
+    ApiCallStmt,
+    CreateFileStmt,
+    DeleteFileStmt,
+    EmailStmt,
     BinaryOp,
     CountOfExpr,
     Condition,
@@ -22,11 +26,13 @@ from parser import (
     ImportStmt,
     ListAccessExpr,
     ListLiteral,
+    ListFilesStmt,
     MultiSetStmt,
     NewObjectExpr,
     NumberLiteral,
     ObjectDefStmt,
     Program,
+    ReadFileStmt,
     RandomBetweenExpr,
     ReadFromExpr,
     ReturnStmt,
@@ -43,12 +49,20 @@ from parser import (
     WhileStmt,
     AttrRefExpr,
     VarRef,
+    WebsocketStmt,
+    WriteFileStmt,
     parse,
 )
 
 
 class RuntimeErrorRC(Exception):
     pass
+
+
+def _integration_error(msg: str, *, line_no: int | None) -> RuntimeErrorRC:
+    if line_no is None:
+        return RuntimeErrorRC(msg)
+    return RuntimeErrorRC(f"{msg} on line {line_no}.")
 
 
 def _undefined_name_error(name: str, *, line_no: int | None) -> RuntimeErrorRC:
@@ -211,6 +225,152 @@ def _exec_stmt(st: Any, env: Environment, *, base_dir: Path) -> None:
         if not isinstance(url_val, str):
             raise RuntimeErrorRC(f"Oops! fetch needs a URL text on line {st.line_no}.")
         env.variables["data"] = _fetch_url(url_val, line_no=st.line_no)
+        return
+
+    if isinstance(st, EmailStmt):
+        try:
+            from integrations import IntegrationError, send_email
+        except ModuleNotFoundError as e:
+            raise RuntimeErrorRC("Oops! integrations.py is missing.") from e
+
+        to_val = _eval_expr(st.to_addr, env, line_no=st.line_no, base_dir=base_dir)
+        subject_val = _eval_expr(st.subject, env, line_no=st.line_no, base_dir=base_dir)
+        msg_val = _eval_expr(st.message, env, line_no=st.line_no, base_dir=base_dir)
+        if not isinstance(to_val, str) or not isinstance(subject_val, str) or not isinstance(msg_val, str):
+            raise RuntimeErrorRC(f"Oops! Email to/subject/message must be text on line {st.line_no}.")
+        try:
+            send_email(to_val, subject_val, msg_val)
+        except IntegrationError as e:
+            raise RuntimeErrorRC(str(e)) from e
+        return
+
+    if isinstance(st, CreateFileStmt):
+        try:
+            from integrations import IntegrationError, create_file
+        except ModuleNotFoundError as e:
+            raise RuntimeErrorRC("Oops! integrations.py is missing.") from e
+        path_val = _eval_expr(st.path, env, line_no=st.line_no, base_dir=base_dir)
+        if not isinstance(path_val, str):
+            raise RuntimeErrorRC(f"Oops! File path must be text on line {st.line_no}.")
+        try:
+            create_file(path_val, base_dir=base_dir)
+        except IntegrationError as e:
+            raise RuntimeErrorRC(str(e)) from e
+        return
+
+    if isinstance(st, WriteFileStmt):
+        try:
+            from integrations import IntegrationError, write_file
+        except ModuleNotFoundError as e:
+            raise RuntimeErrorRC("Oops! integrations.py is missing.") from e
+        content_val = _eval_expr(st.content, env, line_no=st.line_no, base_dir=base_dir)
+        path_val = _eval_expr(st.path, env, line_no=st.line_no, base_dir=base_dir)
+        if not isinstance(path_val, str):
+            raise RuntimeErrorRC(f"Oops! File path must be text on line {st.line_no}.")
+        try:
+            write_file(path_val, str(content_val), base_dir=base_dir)
+        except IntegrationError as e:
+            raise RuntimeErrorRC(str(e)) from e
+        return
+
+    if isinstance(st, ReadFileStmt):
+        try:
+            from integrations import IntegrationError, read_file
+        except ModuleNotFoundError as e:
+            raise RuntimeErrorRC("Oops! integrations.py is missing.") from e
+        path_val = _eval_expr(st.path, env, line_no=st.line_no, base_dir=base_dir)
+        if not isinstance(path_val, str):
+            raise RuntimeErrorRC(f"Oops! File path must be text on line {st.line_no}.")
+        try:
+            env.variables[st.var_name] = read_file(path_val, base_dir=base_dir)
+        except IntegrationError as e:
+            raise RuntimeErrorRC(str(e)) from e
+        return
+
+    if isinstance(st, DeleteFileStmt):
+        try:
+            from integrations import IntegrationError, delete_file
+        except ModuleNotFoundError as e:
+            raise RuntimeErrorRC("Oops! integrations.py is missing.") from e
+        path_val = _eval_expr(st.path, env, line_no=st.line_no, base_dir=base_dir)
+        if not isinstance(path_val, str):
+            raise RuntimeErrorRC(f"Oops! File path must be text on line {st.line_no}.")
+        try:
+            delete_file(path_val, base_dir=base_dir)
+        except IntegrationError as e:
+            raise RuntimeErrorRC(str(e)) from e
+        return
+
+    if isinstance(st, ListFilesStmt):
+        try:
+            from integrations import IntegrationError, list_files
+        except ModuleNotFoundError as e:
+            raise RuntimeErrorRC("Oops! integrations.py is missing.") from e
+        path_val = _eval_expr(st.path, env, line_no=st.line_no, base_dir=base_dir)
+        if not isinstance(path_val, str):
+            raise RuntimeErrorRC(f"Oops! Folder path must be text on line {st.line_no}.")
+        try:
+            items = list_files(path_val, base_dir=base_dir)
+        except IntegrationError as e:
+            raise RuntimeErrorRC(str(e)) from e
+        print(" ".join(items))
+        return
+
+    if isinstance(st, ApiCallStmt):
+        try:
+            from integrations import IntegrationError, call_api
+        except ModuleNotFoundError as e:
+            raise RuntimeErrorRC("Oops! integrations.py is missing.") from e
+
+        url_val = _eval_expr(st.url, env, line_no=st.line_no, base_dir=base_dir)
+        if not isinstance(url_val, str):
+            raise RuntimeErrorRC(f"Oops! API url must be text on line {st.line_no}.")
+
+        headers: Dict[str, str] = {}
+        for k, vexpr in st.headers:
+            v = _eval_expr(vexpr, env, line_no=st.line_no, base_dir=base_dir)
+            headers[k] = str(v)
+
+        params: Dict[str, str] = {}
+        for k, vexpr in st.params:
+            v = _eval_expr(vexpr, env, line_no=st.line_no, base_dir=base_dir)
+            params[k] = str(v)
+
+        print("Calling API...")
+        try:
+            resp = call_api(url_val, method=st.method, headers=headers, params=params)
+        except IntegrationError as e:
+            raise RuntimeErrorRC(str(e)) from e
+
+        if st.store_var:
+            env.variables[st.store_var] = resp
+        else:
+            env.variables["response"] = resp
+        return
+
+    if isinstance(st, WebsocketStmt):
+        try:
+            from integrations import IntegrationError, start_websocket_server
+        except ModuleNotFoundError as e:
+            raise RuntimeErrorRC("Oops! integrations.py is missing.") from e
+
+        def on_message(msg: str) -> Optional[str]:
+            # provide message as a variable during handler execution
+            old_vars = env.variables
+            local_vars = dict(old_vars)
+            local_vars["message"] = msg
+            env.variables = local_vars
+            try:
+                _exec_block(st.on_message_body, env, base_dir=base_dir)
+            finally:
+                env.variables = old_vars
+            return None
+
+        print(f"Websocket server running on port {st.port}...")
+        try:
+            start_websocket_server(port=st.port, on_message=on_message)
+        except IntegrationError as e:
+            raise RuntimeErrorRC(str(e)) from e
         return
 
     if isinstance(st, AddToListStmt):
