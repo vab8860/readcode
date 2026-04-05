@@ -59,6 +59,12 @@ class AskStmt(Stmt):
 
 
 @dataclass(frozen=True)
+class AskAIStmt(Stmt):
+    prompt: Expr
+    line_no: int
+
+
+@dataclass(frozen=True)
 class IfStmt(Stmt):
     condition: "Condition"
     body: List[Stmt]
@@ -360,9 +366,12 @@ def _parse_stmt(lines: Sequence[LineTokens], i: int) -> Tuple[Stmt, int]:
     if head == "set":
         # multiple assignment: set a, b, c to 1, 2, 3
         if "to" in toks:
-            to_i = toks.index("to")
-            if "," in toks[1:to_i]:
-                return _parse_multi_set(lt), i + 1
+            try:
+                to_i = toks.index("to")
+                if "," in toks[1:to_i]:
+                    return _parse_multi_set(lt), i + 1
+            except ValueError:
+                pass
         # attribute assignment: set obj.prop to <expr>
         if len(toks) >= 4 and toks[2] == "to" and "." in toks[1]:
             return _parse_set_attr(lt), i + 1
@@ -378,6 +387,8 @@ def _parse_stmt(lines: Sequence[LineTokens], i: int) -> Tuple[Stmt, int]:
             return _parse_do_method(lt), i + 1
         return _parse_do(lt), i + 1
     if head == "ask":
+        if toks[:2] == ["ask", "ai"]:
+            return _parse_ask_ai(lt), i + 1
         return _parse_ask(lt), i + 1
     if head == "please":
         return _parse_please(lt), i + 1
@@ -395,6 +406,9 @@ def _parse_stmt(lines: Sequence[LineTokens], i: int) -> Tuple[Stmt, int]:
         return _parse_return(lt), i + 1
 
     if head == "add":
+        if len(toks) >= 2 and toks[1] == "property":
+             # This is handled inside _parse_object, but if it's seen here it's an error
+             raise ParseError(f"Oops! 'add property' must be inside a 'create object' block on line {lt.line_no}.")
         return _parse_add_to_list(lt), i + 1
 
     if head == "save":
@@ -609,6 +623,12 @@ def _parse_show_parts(tokens: Sequence[str], line_no: int) -> List[Expr]:
     out: List[Expr] = []
     i = 0
     while i < len(tokens):
+        # string operations: uppercase/lowercase/length of <expr>
+        if i + 2 < len(tokens) and tokens[i] in ("uppercase", "lowercase", "length") and tokens[i + 1] == "of":
+            expr = _parse_expr_from_tokens(tokens[i:], line_no)
+            out.append(expr)
+            return out
+
         # list helper expressions
         if i + 3 < len(tokens) and tokens[i] in ("first", "last") and tokens[i + 1] == "item" and tokens[i + 2] == "of":
             out.append(_parse_expr_from_tokens(tokens[i : i + 4], line_no))
@@ -936,6 +956,14 @@ def _parse_ask(lt: LineTokens) -> AskStmt:
     return AskStmt(name=lt.tokens[1], line_no=lt.line_no)
 
 
+def _parse_ask_ai(lt: LineTokens) -> AskAIStmt:
+    # ask ai "prompt"
+    if len(lt.tokens) != 3 or lt.tokens[:2] != ["ask", "ai"]:
+        raise ParseError(f"Invalid ask ai statement on line {lt.line_no}. Example: ask ai \"write hello world\"")
+    prompt = _parse_expr_from_tokens([lt.tokens[2]], lt.line_no)
+    return AskAIStmt(prompt=prompt, line_no=lt.line_no)
+
+
 def _parse_please(lt: LineTokens) -> AskStmt:
     # please ask <name>
     if len(lt.tokens) != 3 or lt.tokens[1] != "ask":
@@ -989,6 +1017,10 @@ def _parse_comparison(tokens: Sequence[str], line_no: int) -> Tuple[str, List[st
 
     if len(tokens) >= 2 and tokens[0] == "equal" and tokens[1] == "to":
         return "==", list(tokens[2:])
+
+    # not equal to <expr>
+    if len(tokens) >= 3 and tokens[0] == "not" and tokens[1] == "equal" and tokens[2] == "to":
+        return "!=", list(tokens[3:])
 
     if tokens[0] == "not":
         return "!=", list(tokens[1:])

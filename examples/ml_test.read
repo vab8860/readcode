@@ -1,0 +1,12 @@
+load data from "sample_data.csv"
+normalize data
+split data into training 80 and testing 20
+create neural network "MyAI"
+add input layer 4 neurons
+add hidden layer 8 neurons activation "relu"
+add output layer 3 neurons activation "softmax"
+set learning rate to 0.001
+set epochs to 50
+train model on training data
+show accuracy
+save model as "myai.model"

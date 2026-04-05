@@ -567,7 +567,7 @@ def _parse_web_document(lines: List[LineTokens]) -> WebDocument:
             start=i,
             page=current_page,
         )
-        if not consumed:
+        if not consumed and new_i == i:
             raise WebGenError(
                 f"Oops! I don't understand '{toks[0]}' on line {lt.line_no}."
             )
@@ -589,6 +589,7 @@ def _parse_web_into_page(
     in_navbar = False
     in_form = False
     current_form: Optional[WebForm] = None
+    any_consumed = False
 
     while i < len(lines):
         lt = lines[i]
@@ -599,7 +600,20 @@ def _parse_web_into_page(
 
         # stop at next page
         if toks[:2] == ["create", "page"]:
-            return True, i
+            return (any_consumed or i > start), i
+
+        # stop at end page
+        if toks == ["end", "page"]:
+            return True, i + 1
+
+        # set title to "..."
+        if toks[:2] == ["set", "title"] and len(toks) >= 4 and toks[2] == "to":
+            page.title = _require_quoted(toks[3], what="Title", line_no=lt.line_no)
+            i += 1
+            any_consumed = True
+            if parse_one:
+                return True, i
+            continue
 
         # set background color to "blue"
         if toks[:3] == ["set", "background", "color"]:
@@ -623,6 +637,14 @@ def _parse_web_into_page(
                 )
             page.font_color = _require_quoted(toks[4], what="Font color", line_no=lt.line_no)
             i += 1
+            if parse_one:
+                return True, i
+            continue
+
+        # handle generic set statements (ignore them)
+        if toks[0] == "set":
+            i += 1
+            any_consumed = True
             if parse_one:
                 return True, i
             continue
@@ -666,6 +688,7 @@ def _parse_web_into_page(
             style = _parse_style_props(filtered, start=3, line_no=lt.line_no) if len(filtered) > 3 else WebStyle()
             page.heading = WebHeading(text=text, style=style, shadow=shadow)
             i += 1
+            any_consumed = True
             if parse_one:
                 return True, i
             continue
@@ -806,6 +829,21 @@ def _parse_web_into_page(
                 return True, i
             continue
 
+        # add text "..." (synonym for paragraph)
+        if toks[:2] == ["add", "text"]:
+            if len(toks) < 3:
+                raise WebGenError(
+                    f"Invalid add text on line {lt.line_no}. Example: add text \"Hello\""
+                )
+            text = _require_quoted(toks[2], what="Text", line_no=lt.line_no)
+            style = _parse_style_props(toks, start=3, line_no=lt.line_no) if len(toks) > 3 else WebStyle()
+            page.paragraphs.append(WebParagraph(text=text, style=style))
+            i += 1
+            any_consumed = True
+            if parse_one:
+                return True, i
+            continue
+
         # add paragraph "..."
         if toks[:2] == ["add", "paragraph"]:
             if len(toks) < 3:
@@ -816,6 +854,7 @@ def _parse_web_into_page(
             style = _parse_style_props(toks, start=3, line_no=lt.line_no) if len(toks) > 3 else WebStyle()
             page.paragraphs.append(WebParagraph(text=text, style=style))
             i += 1
+            any_consumed = True
             if parse_one:
                 return True, i
             continue
@@ -833,6 +872,7 @@ def _parse_web_into_page(
                 style = _parse_style_props(toks, start=6, line_no=lt.line_no) if len(toks) > 6 else WebStyle()
                 page.button_links.append(WebButtonLink(text=text, href=href, style=style))
                 i += 1
+                any_consumed = True
                 if parse_one:
                     return True, i
                 continue
@@ -840,6 +880,7 @@ def _parse_web_into_page(
             style = _parse_style_props(toks, start=3, line_no=lt.line_no) if len(toks) > 3 else WebStyle()
             page.buttons.append(WebButton(text=text, style=style))
             i += 1
+            any_consumed = True
             if parse_one:
                 return True, i
             continue

@@ -1,2 +1,0 @@
-[console_scripts]
-readcode = run:main

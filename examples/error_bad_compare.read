@@ -1,6 +1,0 @@
-set age to 18
-set name to Rahul
-
-if the age is greater than name ...
-show should not work
-and end

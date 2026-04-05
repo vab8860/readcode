@@ -1,4 +1,0 @@
-set a to 10
-set b to 0
-set c to a divided by b
-show c

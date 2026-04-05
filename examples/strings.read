@@ -1,8 +1,0 @@
-ask name
-set greeting to hello joined with name
-show greeting
-
-ask first
-ask last
-set fullname to first joined with last
-show fullname

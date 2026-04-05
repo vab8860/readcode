@@ -27,6 +27,26 @@ def main(argv: list[str] | None = None) -> int:
         src_path = Path(args.file)
         src = src_path.read_text(encoding="utf-8")
 
+        # ML mode: execute ML/AI building commands if the file uses the ML DSL
+        ml_src = src.lower()
+        if "load data from" in ml_src or "create neural network" in ml_src:
+            try:
+                from ml_engine import MLError, run_ml_source
+            except ModuleNotFoundError:
+                print(
+                    "ml_engine.py is not available in your installed ReadCode environment. "
+                    "Reinstall ReadCode or run: readcode <file>.read",
+                    file=sys.stderr,
+                )
+                return 1
+
+            try:
+                run_ml_source(src, base_dir=src_path.parent)
+                return 0
+            except MLError as e:
+                print(str(e), file=sys.stderr)
+                return 1
+
         # Web mode: generate an HTML site if the file uses the web DSL
         if "create page" in src.lower():
             out_dir = src_path.parent / f"{src_path.stem}_site"
@@ -41,7 +61,7 @@ def main(argv: list[str] | None = None) -> int:
             except ModuleNotFoundError:
                 print(
                     "server_generator.py is not available in your installed ReadCode environment. "
-                    "Reinstall ReadCode (e.g. pip install -e .) or run: python run.py <file>.read",
+                    "Reinstall ReadCode (e.g. pip install -e .) or run: readcode <file>.read",
                     file=sys.stderr,
                 )
                 return 1

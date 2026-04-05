@@ -10,6 +10,7 @@ from lexer import lex
 from parser import (
     AddToListStmt,
     AskStmt,
+    AskAIStmt,
     AsyncBlockStmt,
     ApiCallStmt,
     CreateFileStmt,
@@ -53,6 +54,9 @@ from parser import (
     WriteFileStmt,
     parse,
 )
+
+from lexer import LexError
+from parser import ParseError
 
 
 class RuntimeErrorRC(Exception):
@@ -145,6 +149,55 @@ def _exec_stmt(st: Any, env: Environment, *, base_dir: Path) -> None:
             env.variables[st.name] = int(s)
         else:
             env.variables[st.name] = s
+        return
+
+    if isinstance(st, AskAIStmt):
+        try:
+            from ai_helper import AIError, groq_generate_readcode
+        except ModuleNotFoundError as e:
+            raise RuntimeErrorRC("Oops! ai_helper.py is missing.") from e
+
+        prompt_val = _eval_expr(st.prompt, env, line_no=st.line_no, base_dir=base_dir)
+        if not isinstance(prompt_val, str):
+            raise RuntimeErrorRC(f"Oops! ask ai needs a text prompt on line {st.line_no}.")
+
+        print("Asking AI...")
+        try:
+            generated = groq_generate_readcode(prompt_val, base_dir=base_dir)
+        except AIError as e:
+            raise RuntimeErrorRC(str(e)) from e
+
+        print("--- AI Generated ReadCode ---")
+        print(generated)
+        print("--- End Generated ReadCode ---")
+
+        # Execute generated code in same environment
+        try:
+            lines = lex(generated)
+            program = parse(lines)
+            execute(program, env=env, base_dir=base_dir)
+        except (LexError, ParseError) as pe:
+            # One repair attempt: ask Groq to fix the generated code to be valid ReadCode.
+            repair_prompt = (
+                "Fix the following ReadCode program so that it is valid and parses correctly. "
+                "Return ONLY the corrected ReadCode program, no explanations.\n\n"
+                f"Parse/Lex error: {pe}\n\n"
+                "Program to fix:\n"
+                f"{generated}\n"
+            )
+            print("AI output did not parse. Asking AI to repair...")
+            try:
+                repaired = groq_generate_readcode(repair_prompt, base_dir=base_dir)
+            except AIError as e:
+                raise RuntimeErrorRC(str(e)) from e
+
+            print("--- AI Repaired ReadCode ---")
+            print(repaired)
+            print("--- End Repaired ReadCode ---")
+
+            lines2 = lex(repaired)
+            program2 = parse(lines2)
+            execute(program2, env=env, base_dir=base_dir)
         return
 
     if isinstance(st, ShowStmt):

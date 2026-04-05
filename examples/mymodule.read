@@ -1,3 +1,0 @@
-task say_hi ...
-say "Hi from module"
-and end

@@ -22,9 +22,9 @@ git clone https://github.com/vab8860/readcode.git
 cd readcode
 ```
 
-2. Run programs with Python 3.7+:
+2. Run programs with ReadCode:
 ```bash
-python run.py examples/hello.read
+readcode examples/hello.read
 ```
 
 ## Syntax Guide
@@ -128,10 +128,10 @@ readcode/
 
 ```bash
 # Run an example
-python run.py examples/hello.read
+readcode examples/hello.read
 
 # Run your own program
-python run.py my_program.read
+readcode my_program.read
 ```
 
 ## Error Handling

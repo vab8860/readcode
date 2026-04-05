@@ -1,0 +1,85 @@
+say "SMOKE TEST START"
+
+# variables + math
+set a to 10
+set b to 5
+set sum to a plus b
+set diff to a minus b
+set prod to a times b
+set quot to a divided by b
+say "sum" joined with sum
+say "diff" joined with diff
+say "prod" joined with prod
+say "quot" joined with quot
+
+# if/else
+set flag to ""
+if the a is greater than b ...
+  set flag to "A_GT_B"
+else ...
+  set flag to "A_NOT_GT_B"
+and end
+say flag
+
+# repeat loop
+set counter to 0
+repeat 3 times ...
+  set counter to counter plus 1
+and end
+say "counter" joined with counter
+
+# while loop
+while counter is greater than 0 ...
+  set counter to counter minus 1
+and end
+say "counter_after_while" joined with counter
+
+# tasks/functions
+task add_two with x and y ...
+  set result to x plus y
+  give back result
+and end
+set r to run add_two with 7 and 8
+say "task_result" joined with r
+
+# lists
+set nums to list 1 2 3
+add 4 to nums
+say "count" joined with count of nums
+say "first" joined with first item of nums
+say "last" joined with last item of nums
+show all nums
+
+# objects
+create object "Person"
+  add property name
+  add method greet ...
+    say "Hello" joined with name
+  end method
+end object
+set p to new Person
+set p.name to "Alice"
+do p.greet
+
+# try/catch + error handling (divide by zero)
+try ...
+  set bad to 10 divided by 0
+  say bad
+catch errors ...
+  say "caught_error"
+and end
+
+# file operations
+create file "smoke_temp.txt"
+write "hello file" to file "smoke_temp.txt"
+read file "smoke_temp.txt" into content
+say content
+delete file "smoke_temp.txt"
+
+# string operations
+set s to "Hello"
+say uppercase of s
+say lowercase of s
+say length of s
+
+say "SMOKE TEST END"
